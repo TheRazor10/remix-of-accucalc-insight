@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// Removed Supabase client - no auth required
 import { getCorsHeaders, handleCorsPreflightRequest } from "../_shared/cors.ts";
 
 // Input validation constants
@@ -25,32 +25,7 @@ serve(async (req) => {
   }
 
   try {
-    // Verify authentication - require valid JWT token
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(
-        JSON.stringify({ error: 'Authentication required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    // Verify the user is authenticated
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
-    
-    if (userError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid or expired token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // User is authenticated, proceed with extraction
+    // Parse request body - no authentication required for standalone use
     const { imageBase64, mimeType, useProModel, ownCompanyIds } = await req.json();
 
     // Validate imageBase64 exists and is a string

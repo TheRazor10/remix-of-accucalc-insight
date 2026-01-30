@@ -8,6 +8,7 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Admin from "./pages/Admin";
 import PendingApproval from "./pages/PendingApproval";
+import InvoiceStandalone from "./pages/InvoiceStandalone";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -20,7 +21,11 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Index />} />
+            {/* Standalone invoice verification - no auth required */}
+            <Route path="/" element={<InvoiceStandalone />} />
+            <Route path="/invoice" element={<InvoiceStandalone />} />
+            {/* Original routes */}
+            <Route path="/app" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
             <Route path="/admin" element={<Admin />} />
             <Route path="/pending" element={<PendingApproval />} />
@@ -34,3 +39,4 @@ const App = () => (
 );
 
 export default App;
+
