@@ -1,4 +1,3 @@
-import { supabase } from '@/integrations/supabase/client';
 import {
   InvoiceExcelRow,
   ExtractedInvoiceData,
@@ -10,6 +9,7 @@ import {
 import { normalizeDocumentNumber, normalizeDate, datesMatch } from './purchaseJournalParser';
 import type { UploadedFile } from '@/components/MultiImageUpload';
 import { API_CONFIG, INVOICE_CONFIG, STANDALONE_CONFIG } from '@/config/constants';
+
 
 /**
  * Extract invoice data from an uploaded file using AI OCR
@@ -129,38 +129,6 @@ async function callStandaloneServer(
 }
 
 /**
- * Call the Supabase edge function for invoice extraction
- */
-async function callSupabaseFunction(
-  base64: string,
-  useProModel: boolean,
-  ownCompanyIds: string[]
-): Promise<any> {
-  const response = await supabase.functions.invoke('extract-invoice', {
-    body: {
-      imageBase64: base64,
-      mimeType: 'image/jpeg',
-      useProModel,
-      ownCompanyIds: ownCompanyIds.length > 0 ? ownCompanyIds : undefined,
-    },
-  });
-
-  if (response.error) {
-    const errorMsg = response.error.message || '';
-    if (errorMsg.includes('429') || errorMsg.includes('Rate limit') || errorMsg.includes('Too many requests')) {
-      throw new RateLimitError('Rate limit exceeded');
-    }
-    throw new Error(errorMsg || 'Unknown error');
-  }
-
-  if (response.data?.error && response.data?.retryable) {
-    throw new RateLimitError(response.data.error);
-  }
-
-  return response.data;
-}
-
-/**
  * Extract invoice data from an uploaded file using AI OCR
  * Throws RateLimitError if rate limited (for retry handling)
  * @param useProModel - If true, uses gemini-2.5-pro instead of flash
@@ -178,10 +146,7 @@ async function extractInvoiceDataInternal(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     );
 
-    // Call either standalone server or Supabase based on config
-    const data = STANDALONE_CONFIG.useStandaloneServer
-      ? await callStandaloneServer(base64, useProModel, ownCompanyIds)
-      : await callSupabaseFunction(base64, useProModel, ownCompanyIds);
+    const data = await callStandaloneServer(base64, useProModel, ownCompanyIds);
 
     const taxBaseAmount = parseAmountValue(data.taxBaseAmount);
     const vatAmount = parseAmountValue(data.vatAmount);
@@ -391,27 +356,18 @@ async function extractLastPageData(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     );
 
-    const response = await supabase.functions.invoke('extract-invoice', {
-      body: {
-        imageBase64: base64,
-        mimeType: 'image/jpeg',
-      },
-    });
-
-    if (response.error || (response.data?.error && response.data?.retryable)) {
-      return null;
-    }
+    const data = await callStandaloneServer(base64, false, []);
 
     return {
       imageIndex: fileIndex,
       fileName: fileName,
-      documentType: response.data.documentType,
-      documentNumber: sanitizeDocumentNumber(response.data.documentNumber),
-      documentDate: response.data.documentDate,
-      supplierId: response.data.supplierId,
-      taxBaseAmount: parseAmountValue(response.data.taxBaseAmount),
-      vatAmount: parseAmountValue(response.data.vatAmount),
-      confidence: response.data.confidence || 'medium',
+      documentType: data.documentType,
+      documentNumber: sanitizeDocumentNumber(data.documentNumber),
+      documentDate: data.documentDate,
+      supplierId: data.supplierId,
+      taxBaseAmount: parseAmountValue(data.taxBaseAmount),
+      vatAmount: parseAmountValue(data.vatAmount),
+      confidence: data.confidence || 'medium',
     };
   } catch (error) {
     console.error('Error extracting last page:', error);
