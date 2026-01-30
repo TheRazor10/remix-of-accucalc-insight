@@ -4,6 +4,17 @@
  */
 
 /**
+ * API endpoint configuration
+ * Set USE_STANDALONE_SERVER to true when running with local server
+ */
+export const STANDALONE_CONFIG = {
+  /** Set to true to use local standalone server instead of Supabase edge function */
+  useStandaloneServer: import.meta.env.VITE_USE_STANDALONE === 'true',
+  /** URL of the standalone server */
+  standaloneServerUrl: import.meta.env.VITE_STANDALONE_URL || 'http://localhost:3001',
+} as const;
+
+/**
  * File upload configuration
  */
 export const UPLOAD_CONFIG = {
