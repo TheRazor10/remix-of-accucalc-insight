@@ -9,7 +9,7 @@ import {
 } from './invoiceComparisonTypes';
 import { normalizeDocumentNumber, normalizeDate, datesMatch } from './purchaseJournalParser';
 import type { UploadedFile } from '@/components/MultiImageUpload';
-import { API_CONFIG, INVOICE_CONFIG } from '@/config/constants';
+import { API_CONFIG, INVOICE_CONFIG, STANDALONE_CONFIG } from '@/config/constants';
 
 /**
  * Extract invoice data from an uploaded file using AI OCR
@@ -97,6 +97,70 @@ const sanitizeDocumentNumber = (docNumber: string | null): string | null => {
 };
 
 /**
+ * Call the standalone server API for invoice extraction
+ */
+async function callStandaloneServer(
+  base64: string,
+  useProModel: boolean,
+  ownCompanyIds: string[]
+): Promise<any> {
+  const response = await fetch(`${STANDALONE_CONFIG.standaloneServerUrl}/extract-invoice`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      imageBase64: base64,
+      mimeType: 'image/jpeg',
+      useProModel,
+      ownCompanyIds: ownCompanyIds.length > 0 ? ownCompanyIds : undefined,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    if (response.status === 429) {
+      throw new RateLimitError('Rate limit exceeded');
+    }
+    throw new Error(`Server error: ${response.status} - ${errorText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Call the Supabase edge function for invoice extraction
+ */
+async function callSupabaseFunction(
+  base64: string,
+  useProModel: boolean,
+  ownCompanyIds: string[]
+): Promise<any> {
+  const response = await supabase.functions.invoke('extract-invoice', {
+    body: {
+      imageBase64: base64,
+      mimeType: 'image/jpeg',
+      useProModel,
+      ownCompanyIds: ownCompanyIds.length > 0 ? ownCompanyIds : undefined,
+    },
+  });
+
+  if (response.error) {
+    const errorMsg = response.error.message || '';
+    if (errorMsg.includes('429') || errorMsg.includes('Rate limit') || errorMsg.includes('Too many requests')) {
+      throw new RateLimitError('Rate limit exceeded');
+    }
+    throw new Error(errorMsg || 'Unknown error');
+  }
+
+  if (response.data?.error && response.data?.retryable) {
+    throw new RateLimitError(response.data.error);
+  }
+
+  return response.data;
+}
+
+/**
  * Extract invoice data from an uploaded file using AI OCR
  * Throws RateLimitError if rate limited (for retry handling)
  * @param useProModel - If true, uses gemini-2.5-pro instead of flash
@@ -114,45 +178,25 @@ async function extractInvoiceDataInternal(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     );
 
-    const response = await supabase.functions.invoke('extract-invoice', {
-      body: {
-        imageBase64: base64,
-        mimeType: 'image/jpeg', // Always JPEG since PDFs are converted
-        useProModel,
-        ownCompanyIds: ownCompanyIds.length > 0 ? ownCompanyIds : undefined,
-      },
-    });
+    // Call either standalone server or Supabase based on config
+    const data = STANDALONE_CONFIG.useStandaloneServer
+      ? await callStandaloneServer(base64, useProModel, ownCompanyIds)
+      : await callSupabaseFunction(base64, useProModel, ownCompanyIds);
 
-    if (response.error) {
-      const errorMsg = response.error.message || '';
-      // Check if it's a rate limit error - throw to allow retry
-      if (errorMsg.includes('429') || errorMsg.includes('Rate limit') || errorMsg.includes('Too many requests')) {
-        throw new RateLimitError('Rate limit exceeded');
-      }
-      
-      console.error('Error extracting invoice:', response.error);
-      return createUnreadableResult(uploadedFile, fileIndex);
-    }
-
-    // Check for rate limit in response data (edge function may return this)
-    if (response.data?.error && response.data?.retryable) {
-      throw new RateLimitError(response.data.error);
-    }
-
-    const taxBaseAmount = parseAmountValue(response.data.taxBaseAmount);
-    const vatAmount = parseAmountValue(response.data.vatAmount);
-    const documentNumber = sanitizeDocumentNumber(response.data.documentNumber);
+    const taxBaseAmount = parseAmountValue(data.taxBaseAmount);
+    const vatAmount = parseAmountValue(data.vatAmount);
+    const documentNumber = sanitizeDocumentNumber(data.documentNumber);
 
     return {
       imageIndex: fileIndex,
       fileName: uploadedFile.originalFile.name,
-      documentType: response.data.documentType,
+      documentType: data.documentType,
       documentNumber,
-      documentDate: response.data.documentDate,
-      supplierId: response.data.supplierId,
+      documentDate: data.documentDate,
+      supplierId: data.supplierId,
       taxBaseAmount,
       vatAmount,
-      confidence: response.data.confidence || 'medium',
+      confidence: data.confidence || 'medium',
       usedProModel: useProModel,
     };
   } catch (error) {
