@@ -137,7 +137,7 @@ If you see one of these IDs, it is the buyer - look for the OTHER company's ID.`
     const fullPrompt = SYSTEM_PROMPT + companyIdExclusionNote + '\n\nPlease extract the invoice data from this image and return it as JSON.';
 
     // Select model based on useProModel flag
-    const modelName = useProModel ? 'gemini-2.5-pro-preview-05-06' : 'gemini-2.5-flash-preview-05-20';
+    const modelName = useProModel ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
     const model = genAI.getGenerativeModel({ model: modelName });
 
     // Prepare the image for Gemini
