@@ -1,7 +1,6 @@
 {
   "name": "invoice-extraction-server",
   "version": "1.0.0",
-  "type": "module",
   "description": "Standalone server for Bulgarian invoice OCR extraction using Gemini API",
   "main": "server.js",
   "scripts": {

@@ -1,22 +1,22 @@
 /**
- * Standalone Invoice Extraction Server
- * 
+ * Standalone Invoice Extraction Server (Development)
+ *
  * This Express server handles Gemini API calls for invoice OCR extraction.
- * Run this locally alongside the Vite frontend.
- * 
+ * Run this locally alongside the Vite frontend during development.
+ *
  * Setup:
  *   1. cd standalone
- *   2. npm install express cors dotenv @google/generative-ai
+ *   2. npm install
  *   3. Create .env file with: GEMINI_API_KEY=your_api_key_here
  *   4. node server.js
- * 
+ *
  * The server runs on http://localhost:3001
  */
 
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 dotenv.config();
 
@@ -36,7 +36,7 @@ if (!process.env.GEMINI_API_KEY) {
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // System prompt for Bulgarian invoice extraction
-const SYSTEM_PROMPT = `You are an expert OCR system specialized in extracting data from Bulgarian invoices (фактури). 
+const SYSTEM_PROMPT = `You are an expert OCR system specialized in extracting data from Bulgarian invoices (фактури).
 Your task is to extract specific fields from invoice images accurately.
 
 CRITICAL - SLASHED ZERO RECOGNITION:
@@ -115,10 +115,10 @@ app.post('/extract-invoice', async (req, res) => {
     }
 
     // Build dynamic prompt with optional company ID exclusion
-    const ownCompanyIdsList = Array.isArray(ownCompanyIds) 
+    const ownCompanyIdsList = Array.isArray(ownCompanyIds)
       ? ownCompanyIds.filter(id => id && id.trim()).map(id => id.trim().toUpperCase())
       : [];
-    
+
     let companyIdExclusionNote = '';
     if (ownCompanyIdsList.length > 0) {
       companyIdExclusionNote = `\n\nCRITICAL - EXCLUDE OWN COMPANY IDs:
@@ -131,7 +131,7 @@ If you see one of these IDs, it is the buyer - look for the OTHER company's ID.`
     const fullPrompt = SYSTEM_PROMPT + companyIdExclusionNote + '\n\nPlease extract the invoice data from this image and return it as JSON.';
 
     // Select model based on useProModel flag
-    const modelName = useProModel ? 'gemini-2.5-pro-preview-05-06' : 'gemini-2.5-flash-preview-05-20';
+    const modelName = useProModel ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
     const model = genAI.getGenerativeModel({ model: modelName });
 
     // Prepare the image for Gemini
@@ -192,7 +192,7 @@ app.get('/health', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Invoice Extraction Server running on http://localhost:${PORT}`);
-  console.log(`   POST /extract-invoice - Extract data from invoice image`);
-  console.log(`   GET  /health         - Health check\n`);
+  console.log(`\nInvoice Extraction Server running on http://localhost:${PORT}`);
+  console.log(`  POST /extract-invoice - Extract data from invoice image`);
+  console.log(`  GET  /health         - Health check\n`);
 });
