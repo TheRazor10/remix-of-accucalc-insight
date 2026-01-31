@@ -18,6 +18,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const path = require('path');
+const fs = require('fs');
 const { exec } = require('child_process');
 
 dotenv.config();
@@ -198,8 +199,10 @@ app.get('/health', (req, res) => {
 });
 
 // All other routes serve the frontend (SPA fallback)
+// Use fs.readFileSync instead of res.sendFile for pkg compatibility
+const indexHtml = fs.readFileSync(path.join(distPath, 'index.html'), 'utf8');
 app.get('*', (req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
+  res.type('html').send(indexHtml);
 });
 
 // Auto-open browser

@@ -19,7 +19,19 @@
   },
   "pkg": {
     "assets": [
-      "public/**/*"
+      "public/**/*.html",
+      "public/**/*.js",
+      "public/**/*.css",
+      "public/**/*.ico",
+      "public/**/*.png",
+      "public/**/*.svg",
+      "public/**/*.json",
+      "public/**/*.woff",
+      "public/**/*.woff2",
+      "public/**/*.ttf"
+    ],
+    "scripts": [
+      "server.js"
     ]
   }
 }
