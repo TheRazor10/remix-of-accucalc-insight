@@ -8,7 +8,7 @@
  */
 export const STANDALONE_CONFIG = {
   /** URL of the standalone server */
-  standaloneServerUrl: import.meta.env.VITE_STANDALONE_URL || 'http://localhost:3001',
+  standaloneServerUrl: import.meta.env.VITE_STANDALONE_URL || '',
 } as const;
 
 /**

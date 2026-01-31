@@ -1,22 +1,24 @@
 /**
  * Standalone Invoice Extraction Server
- * 
- * This Express server handles Gemini API calls for invoice OCR extraction.
- * Run this locally alongside the Vite frontend.
- * 
+ *
+ * This Express server handles Gemini API calls for invoice OCR extraction
+ * and serves the built frontend static files.
+ *
  * Setup:
  *   1. cd standalone
- *   2. npm install express cors dotenv @google/generative-ai
+ *   2. npm install
  *   3. Create .env file with: GEMINI_API_KEY=your_api_key_here
  *   4. node server.js
- * 
+ *
  * The server runs on http://localhost:3001
  */
 
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const path = require('path');
+const { exec } = require('child_process');
 
 dotenv.config();
 
@@ -27,6 +29,10 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// Serve the built frontend static files
+const distPath = path.join(__dirname, 'public');
+app.use(express.static(distPath));
+
 // Validate environment
 if (!process.env.GEMINI_API_KEY) {
   console.error('ERROR: GEMINI_API_KEY is not set in .env file');
@@ -36,7 +42,7 @@ if (!process.env.GEMINI_API_KEY) {
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // System prompt for Bulgarian invoice extraction
-const SYSTEM_PROMPT = `You are an expert OCR system specialized in extracting data from Bulgarian invoices (фактури). 
+const SYSTEM_PROMPT = `You are an expert OCR system specialized in extracting data from Bulgarian invoices (фактури).
 Your task is to extract specific fields from invoice images accurately.
 
 CRITICAL - SLASHED ZERO RECOGNITION:
@@ -115,10 +121,10 @@ app.post('/extract-invoice', async (req, res) => {
     }
 
     // Build dynamic prompt with optional company ID exclusion
-    const ownCompanyIdsList = Array.isArray(ownCompanyIds) 
+    const ownCompanyIdsList = Array.isArray(ownCompanyIds)
       ? ownCompanyIds.filter(id => id && id.trim()).map(id => id.trim().toUpperCase())
       : [];
-    
+
     let companyIdExclusionNote = '';
     if (ownCompanyIdsList.length > 0) {
       companyIdExclusionNote = `\n\nCRITICAL - EXCLUDE OWN COMPANY IDs:
@@ -191,8 +197,23 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// All other routes serve the frontend (SPA fallback)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
+// Auto-open browser
+function openBrowser(url) {
+  const platform = process.platform;
+  const cmd = platform === 'win32' ? 'start' :
+               platform === 'darwin' ? 'open' : 'xdg-open';
+  exec(`${cmd} ${url}`);
+}
+
 app.listen(PORT, () => {
-  console.log(`\n🚀 Invoice Extraction Server running on http://localhost:${PORT}`);
-  console.log(`   POST /extract-invoice - Extract data from invoice image`);
-  console.log(`   GET  /health         - Health check\n`);
+  const url = `http://localhost:${PORT}`;
+  console.log(`\nInvoice Extraction Server running on ${url}`);
+  console.log(`  POST /extract-invoice - Extract data from invoice image`);
+  console.log(`  GET  /health         - Health check\n`);
+  openBrowser(url);
 });

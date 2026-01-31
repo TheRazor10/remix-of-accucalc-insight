@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "build:exe": "vite build && cp -r dist standalone/public && cd standalone && npm install && npm run build-exe"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
