@@ -13,7 +13,6 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "build:exe": "vite build && cp -r dist standalone/public && cd standalone && npm install && npm run build-exe",
     "electron:dev": "vite build && electron .",
     "electron:build": "vite build && electron-builder --win"
   },

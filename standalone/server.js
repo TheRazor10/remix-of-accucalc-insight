@@ -1,8 +1,8 @@
 /**
- * Standalone Invoice Extraction Server
+ * Standalone Invoice Extraction Server (Development)
  *
- * This Express server handles Gemini API calls for invoice OCR extraction
- * and serves the built frontend static files.
+ * This Express server handles Gemini API calls for invoice OCR extraction.
+ * Run this locally alongside the Vite frontend during development.
  *
  * Setup:
  *   1. cd standalone
@@ -17,9 +17,6 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const path = require('path');
-const fs = require('fs');
-const { exec } = require('child_process');
 
 dotenv.config();
 
@@ -29,11 +26,6 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
-// Serve the built frontend static files
-// Use process.cwd() so it works both in pkg (.exe) and normal node
-const distPath = path.join(process.cwd(), 'public');
-app.use(express.static(distPath));
 
 // Validate environment
 if (!process.env.GEMINI_API_KEY) {
@@ -199,28 +191,8 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// All other routes serve the frontend (SPA fallback)
-app.get('*', (req, res) => {
-  const indexPath = path.join(distPath, 'index.html');
-  if (fs.existsSync(indexPath)) {
-    res.type('html').send(fs.readFileSync(indexPath, 'utf8'));
-  } else {
-    res.status(404).send('Frontend not found. Make sure the "public" folder is next to AccuCalc.exe');
-  }
-});
-
-// Auto-open browser
-function openBrowser(url) {
-  const platform = process.platform;
-  const cmd = platform === 'win32' ? 'start' :
-               platform === 'darwin' ? 'open' : 'xdg-open';
-  exec(`${cmd} ${url}`);
-}
-
 app.listen(PORT, () => {
-  const url = `http://localhost:${PORT}`;
-  console.log(`\nInvoice Extraction Server running on ${url}`);
+  console.log(`\nInvoice Extraction Server running on http://localhost:${PORT}`);
   console.log(`  POST /extract-invoice - Extract data from invoice image`);
   console.log(`  GET  /health         - Health check\n`);
-  openBrowser(url);
 });
