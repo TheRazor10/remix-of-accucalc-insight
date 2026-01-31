@@ -12,6 +12,7 @@ dist
 dist-ssr
 standalone/public
 standalone/dist
+release/
 *.local
 
 # Test coverage
