@@ -31,7 +31,8 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // Serve the built frontend static files
-const distPath = path.join(__dirname, 'public');
+// Use process.cwd() so it works both in pkg (.exe) and normal node
+const distPath = path.join(process.cwd(), 'public');
 app.use(express.static(distPath));
 
 // Validate environment
@@ -199,10 +200,13 @@ app.get('/health', (req, res) => {
 });
 
 // All other routes serve the frontend (SPA fallback)
-// Use fs.readFileSync instead of res.sendFile for pkg compatibility
-const indexHtml = fs.readFileSync(path.join(distPath, 'index.html'), 'utf8');
 app.get('*', (req, res) => {
-  res.type('html').send(indexHtml);
+  const indexPath = path.join(distPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.type('html').send(fs.readFileSync(indexPath, 'utf8'));
+  } else {
+    res.status(404).send('Frontend not found. Make sure the "public" folder is next to AccuCalc.exe');
+  }
 });
 
 // Auto-open browser
