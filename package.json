@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "electron/main.js",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -109,7 +109,7 @@
       "!node_modules/.cache"
     ],
     "extraMetadata": {
-      "main": "electron/main.js"
+      "main": "electron/main.cjs"
     },
     "win": {
       "target": "nsis",
