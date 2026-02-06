@@ -376,17 +376,79 @@ async function extractLastPageData(
 }
 
 /**
+ * Select the better amounts from two page extractions.
+ * Invoice totals are always larger than individual line items,
+ * so we prefer the page with higher amounts.
+ * Also validates that VAT is approximately 20% of tax base.
+ */
+function selectBetterAmounts(
+  firstPage: ExtractedInvoiceData,
+  lastPage: ExtractedInvoiceData
+): { taxBaseAmount: number | null; vatAmount: number | null } {
+  const firstHasAmounts = firstPage.taxBaseAmount !== null;
+  const lastHasAmounts = lastPage.taxBaseAmount !== null;
+
+  // If only one page has amounts, use that
+  if (firstHasAmounts && !lastHasAmounts) {
+    console.log('[MergeAmounts] Only first page has amounts, using first page');
+    return { taxBaseAmount: firstPage.taxBaseAmount, vatAmount: firstPage.vatAmount };
+  }
+  if (lastHasAmounts && !firstHasAmounts) {
+    console.log('[MergeAmounts] Only last page has amounts, using last page');
+    return { taxBaseAmount: lastPage.taxBaseAmount, vatAmount: lastPage.vatAmount };
+  }
+  if (!firstHasAmounts && !lastHasAmounts) {
+    console.log('[MergeAmounts] Neither page has amounts');
+    return { taxBaseAmount: null, vatAmount: null };
+  }
+
+  // Both pages have amounts - pick the better one
+  const firstTaxBase = Math.abs(firstPage.taxBaseAmount!);
+  const lastTaxBase = Math.abs(lastPage.taxBaseAmount!);
+  const firstVat = firstPage.vatAmount !== null ? Math.abs(firstPage.vatAmount) : null;
+  const lastVat = lastPage.vatAmount !== null ? Math.abs(lastPage.vatAmount) : null;
+
+  // Check if VAT is approximately 20% of tax base (with 5% tolerance)
+  const firstVatValid = firstVat !== null && Math.abs(firstVat / firstTaxBase - 0.20) < 0.05;
+  const lastVatValid = lastVat !== null && Math.abs(lastVat / lastTaxBase - 0.20) < 0.05;
+
+  console.log(`[MergeAmounts] First page: ДО=${firstTaxBase}, ДДС=${firstVat}, VAT valid=${firstVatValid}`);
+  console.log(`[MergeAmounts] Last page: ДО=${lastTaxBase}, ДДС=${lastVat}, VAT valid=${lastVatValid}`);
+
+  // Prefer the page with valid VAT ratio
+  if (firstVatValid && !lastVatValid) {
+    console.log('[MergeAmounts] First page has valid 20% VAT ratio, using first page');
+    return { taxBaseAmount: firstPage.taxBaseAmount, vatAmount: firstPage.vatAmount };
+  }
+  if (lastVatValid && !firstVatValid) {
+    console.log('[MergeAmounts] Last page has valid 20% VAT ratio, using last page');
+    return { taxBaseAmount: lastPage.taxBaseAmount, vatAmount: lastPage.vatAmount };
+  }
+
+  // Both valid or both invalid - prefer higher amounts (totals > line items)
+  if (firstTaxBase > lastTaxBase) {
+    console.log(`[MergeAmounts] First page has higher amount (${firstTaxBase} > ${lastTaxBase}), using first page`);
+    return { taxBaseAmount: firstPage.taxBaseAmount, vatAmount: firstPage.vatAmount };
+  } else {
+    console.log(`[MergeAmounts] Last page has higher/equal amount (${lastTaxBase} >= ${firstTaxBase}), using last page`);
+    return { taxBaseAmount: lastPage.taxBaseAmount, vatAmount: lastPage.vatAmount };
+  }
+}
+
+/**
  * Merge data from first and last page extractions
- * For document info (type, number, date, supplier): first page takes priority
- * For amounts (tax base, VAT): LAST PAGE takes priority (totals are usually at the end)
+ * For document info (type, number, date, supplier): prefers whichever page has the data
+ * For amounts (tax base, VAT): uses smart selection based on which page has the invoice totals
  */
 function mergePageData(
   firstPage: ExtractedInvoiceData,
   lastPage: ExtractedInvoiceData | null
 ): ExtractedInvoiceData {
   if (!lastPage) return firstPage;
-  
-  // For amounts: prefer last page (invoice totals), fall back to first page
+
+  // Smart amount selection - picks the page with actual invoice totals
+  const amounts = selectBetterAmounts(firstPage, lastPage);
+
   // For document info: prefer first page, fall back to last page
   return {
     imageIndex: firstPage.imageIndex,
@@ -395,10 +457,10 @@ function mergePageData(
     documentNumber: firstPage.documentNumber ?? lastPage.documentNumber,
     documentDate: firstPage.documentDate ?? lastPage.documentDate,
     supplierId: firstPage.supplierId ?? lastPage.supplierId,
-    // AMOUNTS: Last page takes priority (invoice totals are on the last page)
-    taxBaseAmount: lastPage.taxBaseAmount ?? firstPage.taxBaseAmount,
-    vatAmount: lastPage.vatAmount ?? firstPage.vatAmount,
-    confidence: firstPage.confidence === 'unreadable' ? lastPage.confidence : 
+    // AMOUNTS: Smart selection based on which page has the real totals
+    taxBaseAmount: amounts.taxBaseAmount,
+    vatAmount: amounts.vatAmount,
+    confidence: firstPage.confidence === 'unreadable' ? lastPage.confidence :
                 lastPage.confidence === 'unreadable' ? firstPage.confidence :
                 (firstPage.confidence === 'high' || lastPage.confidence === 'high') ? 'high' : 'medium',
   };
