@@ -25,12 +25,17 @@ class RateLimitError extends Error {
 // Sleep utility
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Check if error is a rate limit error
-const isRateLimitError = (error: unknown): boolean => {
+// Check if error is a retryable error (rate limit or overloaded)
+const isRetryableError = (error: unknown): boolean => {
   if (error instanceof RateLimitError) return true;
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
-    return msg.includes('429') || msg.includes('rate limit') || msg.includes('too many requests');
+    return msg.includes('429') ||
+           msg.includes('rate limit') ||
+           msg.includes('too many requests') ||
+           msg.includes('503') ||
+           msg.includes('overloaded') ||
+           msg.includes('service unavailable');
   }
   return false;
 };
@@ -166,7 +171,7 @@ async function extractInvoiceDataInternal(
     };
   } catch (error) {
     // Re-throw rate limit errors for retry handling
-    if (isRateLimitError(error)) {
+    if (isRetryableError(error)) {
       throw error;
     }
     
@@ -497,7 +502,7 @@ export async function extractMultipleInvoices(
         firstPageResult = await extractInvoiceData(file, i, ownCompanyIds);
         break;
       } catch (error) {
-        if (isRateLimitError(error) && retries < MAX_RETRIES) {
+        if (isRetryableError(error) && retries < MAX_RETRIES) {
           const backoffMs = Math.pow(3, retries) * BASE_BACKOFF_MS;
           console.log(`Rate limited, retry ${retries + 1}/${MAX_RETRIES} after ${backoffMs / 1000}s`);
           await sleep(backoffMs);
