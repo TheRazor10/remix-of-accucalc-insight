@@ -595,6 +595,33 @@ function countMismatches(
 }
 
 /**
+ * Find exact document number match in Excel rows.
+ * Used in Pass 1 of two-pass matching algorithm.
+ * @returns The matching Excel row, or null if no exact match exists
+ */
+function findExactDocumentNumberMatch(
+  invoiceData: ExtractedInvoiceData,
+  excelRows: InvoiceExcelRow[],
+  excludeRows: Set<number>
+): InvoiceExcelRow | null {
+  if (!invoiceData.documentNumber) return null;
+  
+  const normalizedInvoiceNumber = normalizeDocumentNumber(invoiceData.documentNumber);
+  if (!normalizedInvoiceNumber) return null;
+  
+  for (const row of excelRows) {
+    if (excludeRows.has(row.rowIndex)) continue;
+    
+    const normalizedExcelNumber = normalizeDocumentNumber(row.documentNumber);
+    if (normalizedExcelNumber === normalizedInvoiceNumber) {
+      return row;
+    }
+  }
+  
+  return null;
+}
+
+/**
  * Find best matching Excel row - finds row with fewest mismatches (any mismatch count allowed)
  * No longer enforces max 3 mismatches - all documents will be matched and marked suspicious if needed
  */
@@ -940,17 +967,66 @@ export function runVerification(
   extractedInvoices: ExtractedInvoiceData[],
   excelRows: InvoiceExcelRow[]
 ): VerificationSummary {
-  // Process invoices sequentially to enable exclusive 1:1 matching
-  const comparisons: ComparisonResult[] = [];
+  const comparisons: ComparisonResult[] = new Array(extractedInvoices.length);
   const usedExcelRows = new Set<number>();
+  const processedInvoices = new Set<number>();
   
-  for (const invoice of extractedInvoices) {
+  // ============ PASS 1: Exact document number matches first ============
+  // Only process high/medium confidence invoices with a document number
+  // Sort by confidence (high before medium) to prioritize best extractions
+  const pass1Candidates = extractedInvoices
+    .map((invoice, idx) => ({ invoice, idx }))
+    .filter(({ invoice }) => 
+      (invoice.confidence === 'high' || invoice.confidence === 'medium') &&
+      invoice.documentNumber !== null
+    )
+    .sort((a, b) => {
+      // High confidence first
+      if (a.invoice.confidence === 'high' && b.invoice.confidence !== 'high') return -1;
+      if (b.invoice.confidence === 'high' && a.invoice.confidence !== 'high') return 1;
+      return 0;
+    });
+  
+  console.log(`[TwoPass] Pass 1: ${pass1Candidates.length} candidates with high/medium confidence and document number`);
+  
+  for (const { invoice, idx } of pass1Candidates) {
+    const exactMatch = findExactDocumentNumberMatch(invoice, excelRows, usedExcelRows);
+    
+    if (exactMatch) {
+      console.log(`[TwoPass] Pass 1 MATCH: Invoice ${idx} (${invoice.documentNumber}) → Row ${exactMatch.rowIndex}`);
+      
+      // Claim the row and mark invoice as processed
+      usedExcelRows.add(exactMatch.rowIndex);
+      processedInvoices.add(idx);
+      
+      // Build the comparison result for this exact match
+      comparisons[idx] = compareInvoiceWithExcel(invoice, excelRows, new Set(
+        [...usedExcelRows].filter(r => r !== exactMatch.rowIndex)
+      ));
+      // Ensure we use the exact match row (compareInvoiceWithExcel should find it)
+      comparisons[idx].matchedExcelRow = exactMatch.rowIndex;
+    }
+  }
+  
+  console.log(`[TwoPass] Pass 1 complete: ${processedInvoices.size} exact matches claimed`);
+  
+  // ============ PASS 2: Fallback matching for remaining invoices ============
+  // Process all unprocessed invoices (unreadable, low confidence, or no exact match)
+  console.log(`[TwoPass] Pass 2: Processing ${extractedInvoices.length - processedInvoices.size} remaining invoices`);
+  
+  for (let idx = 0; idx < extractedInvoices.length; idx++) {
+    if (processedInvoices.has(idx)) continue;
+    
+    const invoice = extractedInvoices[idx];
     const comparison = compareInvoiceWithExcel(invoice, excelRows, usedExcelRows);
-    comparisons.push(comparison);
+    comparisons[idx] = comparison;
     
     // Mark this row as claimed so no other invoice can use it
     if (comparison.matchedExcelRow !== null) {
       usedExcelRows.add(comparison.matchedExcelRow);
+      console.log(`[TwoPass] Pass 2: Invoice ${idx} (${invoice.fileName}) → Row ${comparison.matchedExcelRow} (${comparison.overallStatus})`);
+    } else {
+      console.log(`[TwoPass] Pass 2: Invoice ${idx} (${invoice.fileName}) → No match found (${comparison.overallStatus})`);
     }
   }
   
