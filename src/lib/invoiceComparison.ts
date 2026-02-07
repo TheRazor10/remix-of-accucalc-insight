@@ -622,32 +622,39 @@ function findExactDocumentNumberMatch(
 }
 
 /**
- * Find best matching Excel row - finds row with fewest mismatches (any mismatch count allowed)
- * No longer enforces max 3 mismatches - all documents will be matched and marked suspicious if needed
+ * Find best matching Excel row - finds row with fewest mismatches.
+ * Enforces a mismatch ceiling to prevent meaningless matches (e.g., unreadable
+ * invoices with all-null fields stealing rows from better candidates).
  */
 function findBestMatch(
   invoiceData: ExtractedInvoiceData,
   excelRows: InvoiceExcelRow[],
-  excludeRows: Set<number> = new Set()
+  excludeRows: Set<number> = new Set(),
+  maxMismatches: number = 4
 ): { row: InvoiceExcelRow; mismatches: number } | null {
   let bestMatch: { row: InvoiceExcelRow; mismatches: number } | null = null;
-  
+
   for (const row of excelRows) {
     // Skip rows already claimed by another invoice
     if (excludeRows.has(row.rowIndex)) continue;
-    
+
     // Count mismatches for this row
     const mismatches = countMismatches(invoiceData, row);
-    
-    // Keep the best match (fewest mismatches) - no max limit now
+
+    // Keep the best match (fewest mismatches)
     if (!bestMatch || mismatches < bestMatch.mismatches) {
       bestMatch = { row, mismatches };
     }
-    
+
     // Perfect match - no need to continue
     if (mismatches === 0) break;
   }
-  
+
+  // Reject match if too many mismatches - prevents unrelated pairings
+  if (bestMatch && bestMatch.mismatches >= maxMismatches) {
+    return null;
+  }
+
   return bestMatch;
 }
 
@@ -1011,16 +1018,20 @@ export function runVerification(
   console.log(`[TwoPass] Pass 1 complete: ${processedInvoices.size} exact matches claimed`);
   
   // ============ PASS 2: Fallback matching for remaining invoices ============
-  // Process all unprocessed invoices (unreadable, low confidence, or no exact match)
-  console.log(`[TwoPass] Pass 2: Processing ${extractedInvoices.length - processedInvoices.size} remaining invoices`);
-  
-  for (let idx = 0; idx < extractedInvoices.length; idx++) {
-    if (processedInvoices.has(idx)) continue;
-    
-    const invoice = extractedInvoices[idx];
+  // Sort by confidence descending so readable invoices claim rows before
+  // unreadable ones, preventing unreadable invoices from stealing rows
+  // that would be better matches for invoices with actual extracted data.
+  const pass2Candidates = extractedInvoices
+    .map((invoice, idx) => ({ invoice, idx }))
+    .filter(({ idx }) => !processedInvoices.has(idx))
+    .sort((a, b) => getConfidenceScore(b.invoice.confidence) - getConfidenceScore(a.invoice.confidence));
+
+  console.log(`[TwoPass] Pass 2: Processing ${pass2Candidates.length} remaining invoices (sorted by confidence)`);
+
+  for (const { invoice, idx } of pass2Candidates) {
     const comparison = compareInvoiceWithExcel(invoice, excelRows, usedExcelRows);
     comparisons[idx] = comparison;
-    
+
     // Mark this row as claimed so no other invoice can use it
     if (comparison.matchedExcelRow !== null) {
       usedExcelRows.add(comparison.matchedExcelRow);
