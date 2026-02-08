@@ -131,17 +131,17 @@ export function InvoiceVerificationTab() {
 
       setIsExtracting(false);
 
-      // Phase 2: Run initial verification to identify suspicious invoices
+      // Phase 2: Run initial verification to identify suspicious and unreadable invoices
       let result = runVerification(extractedInvoices, excelData);
-      
-      // Phase 3: If there are suspicious invoices, retry with Pro model
-      if (result.suspiciousCount > 0) {
-        const suspiciousIndices = result.comparisons
-          .filter(c => c.overallStatus === 'suspicious')
-          .map(c => c.imageIndex);
-        
+
+      // Phase 3: If there are suspicious or unreadable invoices, retry with Pro model
+      const retryIndices = result.comparisons
+        .filter(c => c.overallStatus === 'suspicious' || c.overallStatus === 'unreadable')
+        .map(c => c.imageIndex);
+
+      if (retryIndices.length > 0) {
         // Count how many will actually be retried (not already using Pro)
-        const toRetryCount = suspiciousIndices.filter(
+        const toRetryCount = retryIndices.filter(
           idx => !extractedInvoices[idx].usedProModel
         ).length;
         
@@ -150,14 +150,16 @@ export function InvoiceVerificationTab() {
           setExtractionProgress(0);
           
           toast({
-            title: 'Проверка на съмнителни',
+            title: 'Проверка на съмнителни и нечетливи',
             description: `Повторно извличане на ${toRetryCount} фактури с Pro модел...`,
           });
-          
+
           extractedInvoices = await reExtractSuspiciousInvoices(
-            suspiciousIndices,
+            retryIndices,
             uploadedFiles,
             extractedInvoices,
+            result.comparisons,
+            excelData,
             (completed, total, fileName) => {
               setExtractionProgress((completed / total) * 100);
               if (fileName) {

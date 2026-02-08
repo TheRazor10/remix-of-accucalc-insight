@@ -252,56 +252,91 @@ function getConfidenceScore(confidence: ExtractedInvoiceData['confidence']): num
 }
 
 /**
- * Select the better extraction result based on confidence and field count
+ * Select the better extraction result by comparing against the matched Excel row.
+ * If an Excel row is available, picks whichever extraction has fewer mismatches
+ * against it — this prevents Pro from making things worse when Flash was closer.
+ * Falls back to confidence + field count when no Excel row is available.
  */
 export function selectBetterExtraction(
   original: ExtractedInvoiceData,
-  retried: ExtractedInvoiceData
+  retried: ExtractedInvoiceData,
+  matchedExcelRow?: InvoiceExcelRow | null
 ): ExtractedInvoiceData {
+  // If we have an Excel row, compare mismatches directly — this is the ground truth
+  if (matchedExcelRow) {
+    const originalMismatches = countMismatches(original, matchedExcelRow);
+    const retriedMismatches = countMismatches(retried, matchedExcelRow);
+
+    console.log(`[SelectBetter] Comparing against Excel row ${matchedExcelRow.rowIndex}: original=${originalMismatches} mismatches, pro=${retriedMismatches} mismatches`);
+
+    if (retriedMismatches < originalMismatches) {
+      console.log(`[SelectBetter] Pro has fewer mismatches, using Pro`);
+      return { ...retried, wasDoubleChecked: true };
+    }
+    if (originalMismatches < retriedMismatches) {
+      console.log(`[SelectBetter] Original has fewer mismatches, keeping original`);
+      return { ...original, wasDoubleChecked: true };
+    }
+    // Same mismatch count — fall through to confidence/field comparison
+    console.log(`[SelectBetter] Same mismatch count, falling through to confidence comparison`);
+  }
+
   const originalScore = getConfidenceScore(original.confidence);
   const retriedScore = getConfidenceScore(retried.confidence);
-  
-  // If confidence differs significantly, use the one with higher confidence
+
   if (retriedScore > originalScore) {
     console.log(`[SelectBetter] Pro result has higher confidence (${retried.confidence} > ${original.confidence})`);
     return { ...retried, wasDoubleChecked: true };
   }
-  
+
   if (originalScore > retriedScore) {
     console.log(`[SelectBetter] Original has higher confidence (${original.confidence} > ${retried.confidence})`);
     return { ...original, wasDoubleChecked: true };
   }
-  
+
   // Same confidence - compare field count
   const originalFields = countExtractedFields(original);
   const retriedFields = countExtractedFields(retried);
-  
+
   if (retriedFields > originalFields) {
     console.log(`[SelectBetter] Pro result has more fields (${retriedFields} > ${originalFields})`);
     return { ...retried, wasDoubleChecked: true };
   }
-  
+
   // Default to original if equal or original has more
   console.log(`[SelectBetter] Keeping original (fields: ${originalFields} vs ${retriedFields})`);
   return { ...original, wasDoubleChecked: true };
 }
 
 /**
- * Re-extract suspicious invoices using Pro model
- * Skips invoices that already used Pro during initial extraction
+ * Re-extract suspicious and unreadable invoices using Pro model.
+ * Compares Pro result against the matched Excel row (when available) to ensure
+ * Pro doesn't make things worse — only adopts Pro if it has fewer mismatches.
+ * Skips invoices that already used Pro during initial extraction.
+ *
+ * @param indices - Indices of suspicious and unreadable invoices to retry
+ * @param uploadedFiles - Original uploaded files for re-extraction
+ * @param currentExtractions - Current extraction results
+ * @param firstPassComparisons - Comparison results from the first matching pass,
+ *   used to find the matched Excel row for mismatch-based selection
+ * @param excelRows - Excel data for mismatch comparison
+ * @param onProgress - Progress callback
+ * @param ownCompanyIds - Company IDs to exclude from supplier matching
  */
 export async function reExtractSuspiciousInvoices(
-  suspiciousIndices: number[],
+  indices: number[],
   uploadedFiles: UploadedFile[],
   currentExtractions: ExtractedInvoiceData[],
+  firstPassComparisons: ComparisonResult[],
+  excelRows: InvoiceExcelRow[],
   onProgress?: (completed: number, total: number, currentFileName?: string) => void,
   ownCompanyIds: string[] = []
 ): Promise<ExtractedInvoiceData[]> {
   const results = [...currentExtractions];
   const DELAY_BETWEEN_REQUESTS_MS = API_CONFIG.delayBetweenRequests;
-  
+
   // Filter out invoices that already used Pro model
-  const indicesToRetry = suspiciousIndices.filter(idx => {
+  const indicesToRetry = indices.filter(idx => {
     const extraction = currentExtractions[idx];
     if (extraction.usedProModel) {
       console.log(`[ProRetry] Skipping ${extraction.fileName} - already used Pro model`);
@@ -309,41 +344,50 @@ export async function reExtractSuspiciousInvoices(
     }
     return true;
   });
-  
-  console.log(`[ProRetry] Will retry ${indicesToRetry.length} of ${suspiciousIndices.length} suspicious invoices with Pro model`);
-  
+
+  console.log(`[ProRetry] Will retry ${indicesToRetry.length} of ${indices.length} invoices with Pro model`);
+
+  // Build a lookup for matched Excel rows from the first pass
+  const excelRowsByIndex = new Map(excelRows.map(r => [r.rowIndex, r]));
+
   for (let i = 0; i < indicesToRetry.length; i++) {
     const idx = indicesToRetry[i];
     const file = uploadedFiles[idx];
     const originalExtraction = currentExtractions[idx];
-    
+
     onProgress?.(i, indicesToRetry.length, file.originalFile.name);
-    
+
     try {
       console.log(`[ProRetry] Re-extracting ${file.originalFile.name} with Pro model...`);
-      
+
       // Extract with Pro model (pass company IDs)
       const proResult = await extractInvoiceDataInternal(file, idx, true, ownCompanyIds);
-      
-      // Select the better result
-      const betterResult = selectBetterExtraction(originalExtraction, proResult);
+
+      // Find the Excel row this invoice was matched to in the first pass
+      const comparison = firstPassComparisons[idx];
+      const matchedExcelRow = comparison?.matchedExcelRow !== null && comparison?.matchedExcelRow !== undefined
+        ? excelRowsByIndex.get(comparison.matchedExcelRow) ?? null
+        : null;
+
+      // Select the better result — uses Excel row for ground-truth comparison when available
+      const betterResult = selectBetterExtraction(originalExtraction, proResult, matchedExcelRow);
       results[idx] = betterResult;
-      
-      console.log(`[ProRetry] Result for ${file.originalFile.name}: kept ${betterResult === proResult ? 'Pro' : 'original'}`);
+
+      console.log(`[ProRetry] Result for ${file.originalFile.name}: kept ${betterResult.usedProModel ? 'Pro' : 'original'}`);
     } catch (error) {
       console.error(`[ProRetry] Error re-extracting ${file.originalFile.name}:`, error);
       // Keep original result on error
       results[idx] = { ...originalExtraction, wasDoubleChecked: true };
     }
-    
+
     // Delay before next request
     if (i < indicesToRetry.length - 1) {
       await sleep(DELAY_BETWEEN_REQUESTS_MS);
     }
   }
-  
+
   onProgress?.(indicesToRetry.length, indicesToRetry.length);
-  
+
   return results;
 }
 
@@ -689,32 +733,39 @@ function findExactDocumentNumberMatch(
 }
 
 /**
- * Find best matching Excel row - finds row with fewest mismatches (any mismatch count allowed)
- * No longer enforces max 3 mismatches - all documents will be matched and marked suspicious if needed
+ * Find best matching Excel row - finds row with fewest mismatches.
+ * Enforces a mismatch ceiling to prevent meaningless matches (e.g., unreadable
+ * invoices with all-null fields stealing rows from better candidates).
  */
 function findBestMatch(
   invoiceData: ExtractedInvoiceData,
   excelRows: InvoiceExcelRow[],
-  excludeRows: Set<number> = new Set()
+  excludeRows: Set<number> = new Set(),
+  maxMismatches: number = 4
 ): { row: InvoiceExcelRow; mismatches: number } | null {
   let bestMatch: { row: InvoiceExcelRow; mismatches: number } | null = null;
-  
+
   for (const row of excelRows) {
     // Skip rows already claimed by another invoice
     if (excludeRows.has(row.rowIndex)) continue;
-    
+
     // Count mismatches for this row
     const mismatches = countMismatches(invoiceData, row);
-    
-    // Keep the best match (fewest mismatches) - no max limit now
+
+    // Keep the best match (fewest mismatches)
     if (!bestMatch || mismatches < bestMatch.mismatches) {
       bestMatch = { row, mismatches };
     }
-    
+
     // Perfect match - no need to continue
     if (mismatches === 0) break;
   }
-  
+
+  // Reject match if too many mismatches - prevents unrelated pairings
+  if (bestMatch && bestMatch.mismatches >= maxMismatches) {
+    return null;
+  }
+
   return bestMatch;
 }
 
@@ -1078,16 +1129,20 @@ export function runVerification(
   console.log(`[TwoPass] Pass 1 complete: ${processedInvoices.size} exact matches claimed`);
   
   // ============ PASS 2: Fallback matching for remaining invoices ============
-  // Process all unprocessed invoices (unreadable, low confidence, or no exact match)
-  console.log(`[TwoPass] Pass 2: Processing ${extractedInvoices.length - processedInvoices.size} remaining invoices`);
-  
-  for (let idx = 0; idx < extractedInvoices.length; idx++) {
-    if (processedInvoices.has(idx)) continue;
-    
-    const invoice = extractedInvoices[idx];
+  // Sort by confidence descending so readable invoices claim rows before
+  // unreadable ones, preventing unreadable invoices from stealing rows
+  // that would be better matches for invoices with actual extracted data.
+  const pass2Candidates = extractedInvoices
+    .map((invoice, idx) => ({ invoice, idx }))
+    .filter(({ idx }) => !processedInvoices.has(idx))
+    .sort((a, b) => getConfidenceScore(b.invoice.confidence) - getConfidenceScore(a.invoice.confidence));
+
+  console.log(`[TwoPass] Pass 2: Processing ${pass2Candidates.length} remaining invoices (sorted by confidence)`);
+
+  for (const { invoice, idx } of pass2Candidates) {
     const comparison = compareInvoiceWithExcel(invoice, excelRows, usedExcelRows);
     comparisons[idx] = comparison;
-    
+
     // Mark this row as claimed so no other invoice can use it
     if (comparison.matchedExcelRow !== null) {
       usedExcelRows.add(comparison.matchedExcelRow);
