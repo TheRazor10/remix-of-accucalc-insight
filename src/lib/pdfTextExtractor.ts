@@ -36,7 +36,8 @@ export async function extractPdfText(file: File): Promise<string> {
 export function parseInvoiceFromText(
   text: string,
   fileIndex: number,
-  fileName: string
+  fileName: string,
+  firmVatId: string | null = null
 ): ExtractedSalesPdfData {
   // Normalize whitespace for easier pattern matching
   const normalizedText = text.replace(/\s+/g, ' ').trim();
@@ -59,8 +60,8 @@ export function parseInvoiceFromText(
   const documentDate = extractDate(normalizedText);
   console.log(`[PDF Extract] Document date:`, documentDate);
 
-  // Extract seller and client IDs as a coordinated pair to avoid swapping
-  const { sellerId, clientId } = extractSellerAndClientIds(normalizedText);
+  // Extract seller and client IDs as a coordinated pair, using known firm ID to disambiguate
+  const { sellerId, clientId } = extractSellerAndClientIds(normalizedText, firmVatId);
   console.log(`[PDF Extract] Seller ID:`, sellerId);
   console.log(`[PDF Extract] Client ID:`, clientId);
 
@@ -183,58 +184,102 @@ function extractDate(text: string): string | null {
 }
 
 /**
- * Extract seller and client IDs as a coordinated pair.
- * This prevents the seller fallback from consuming the client's ID.
+ * Normalize a VAT ID for comparison: uppercase, no spaces, strip "BG" prefix.
  */
-function extractSellerAndClientIds(text: string): { sellerId: string | null; clientId: string | null } {
-  // Try section-based extraction first (most reliable)
+function normalizeVatId(id: string): string {
+  return id.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+}
+
+/**
+ * Check if two VAT IDs refer to the same entity.
+ */
+function vatIdsMatch(a: string, b: string): boolean {
+  return normalizeVatId(a) === normalizeVatId(b);
+}
+
+/**
+ * Extract seller and client IDs as a coordinated pair.
+ * When firmVatId (our supplier ID) is known, any extracted ID matching it
+ * is assigned as seller and the remaining ID becomes the client.
+ */
+function extractSellerAndClientIds(
+  text: string,
+  firmVatId: string | null = null
+): { sellerId: string | null; clientId: string | null } {
+  // Collect all BG VAT numbers found in the text (deduplicated)
+  const allBgNumbers: string[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(/BG\s*(\d{9,10})/gi)) {
+    const normalized = 'BG' + m[1];
+    const key = normalized.toUpperCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      allBgNumbers.push(normalized);
+    }
+  }
+
+  // Collect all EIK numbers
+  const allEikNumbers: string[] = [];
+  const seenEik = new Set<string>();
+  for (const m of text.matchAll(/еик[:\s]*(\d{9,13})/gi)) {
+    if (!seenEik.has(m[1])) {
+      seenEik.add(m[1]);
+      allEikNumbers.push(m[1]);
+    }
+  }
+
+  // PRIORITY: If we know our firm VAT ID, use it to disambiguate
+  if (firmVatId) {
+    const firmMatch = allBgNumbers.find(bg => vatIdsMatch(bg, firmVatId));
+
+    if (firmMatch) {
+      // Our firm is the seller — all other IDs are potential clients
+      const otherBg = allBgNumbers.filter(bg => !vatIdsMatch(bg, firmVatId));
+      const clientFromBg = otherBg.length > 0 ? otherBg[0] : null;
+      const clientFromEik = allEikNumbers.length > 0 ? allEikNumbers[0] : null;
+
+      // Also try section-based client extraction for better accuracy
+      const sectionClientId = extractClientIdFromSection(text);
+      // Prefer section-based if it doesn't match our firm
+      const clientId = sectionClientId && !vatIdsMatch(sectionClientId, firmVatId)
+        ? sectionClientId
+        : clientFromBg || clientFromEik;
+
+      console.log(`[ID Extract] Firm ID ${firmVatId} found in PDF as seller. Client: ${clientId}`);
+      return { sellerId: firmMatch.toUpperCase(), clientId };
+    }
+  }
+
+  // Fallback: Try section-based extraction
   const sellerId = extractSellerIdFromSection(text);
   const clientId = extractClientIdFromSection(text);
 
-  // If both found, return them
   if (sellerId && clientId) {
     return { sellerId, clientId };
   }
 
-  // If only one found via sections, try to find the other from all BG numbers
-  const allBgNumbers = [...text.matchAll(/BG\s*(\d{9,10})/gi)]
-    .map(m => 'BG' + m[1]);
-
   if (sellerId && !clientId) {
-    // Client is the first BG number that isn't the seller, or an EIK
     const clientBg = allBgNumbers.find(bg => bg.toUpperCase() !== sellerId.toUpperCase());
     if (clientBg) return { sellerId, clientId: clientBg };
-
-    // Try EIK fallback for client
-    const eikMatch = text.match(/еик[:\s]*(\d{9,13})/i);
-    return { sellerId, clientId: eikMatch ? eikMatch[1] : null };
+    return { sellerId, clientId: allEikNumbers[0] || null };
   }
 
   if (!sellerId && clientId) {
-    // Seller is the first BG number that isn't the client
     const sellerBg = allBgNumbers.find(bg => bg.toUpperCase() !== clientId.toUpperCase());
     return { sellerId: sellerBg || null, clientId };
   }
 
-  // Neither found via sections — use positional heuristic:
-  // On Bulgarian invoices, seller typically appears before client
+  // Neither found via sections — positional heuristic
   if (allBgNumbers.length >= 2) {
     return { sellerId: allBgNumbers[0], clientId: allBgNumbers[1] };
   }
   if (allBgNumbers.length === 1) {
-    // Only one BG number — can't reliably assign. Try EIK for the other.
-    const eikMatch = text.match(/еик[:\s]*(\d{9,13})/i);
-    if (eikMatch) {
-      return { sellerId: allBgNumbers[0], clientId: eikMatch[1] };
-    }
-    return { sellerId: allBgNumbers[0], clientId: null };
+    return { sellerId: allBgNumbers[0], clientId: allEikNumbers[0] || null };
   }
 
-  // No BG numbers at all
-  const eikMatches = [...text.matchAll(/еик[:\s]*(\d{9,13})/gi)];
   return {
     sellerId: null,
-    clientId: eikMatches.length > 0 ? eikMatches[0][1] : null,
+    clientId: allEikNumbers[0] || null,
   };
 }
 
@@ -440,7 +485,8 @@ function parseAmountFromText(amountStr: string): number | null {
  */
 export async function extractMultiplePdfInvoices(
   files: File[],
-  onProgress?: (completed: number, total: number, currentFileName?: string) => void
+  onProgress?: (completed: number, total: number, currentFileName?: string) => void,
+  firmVatId?: string | null
 ): Promise<ExtractedSalesPdfData[]> {
   const results: ExtractedSalesPdfData[] = [];
 
@@ -459,7 +505,7 @@ export async function extractMultiplePdfInvoices(
         results.push(ocrData);
       } else {
         // Native text is readable, use regex parsing
-        const data = parseInvoiceFromText(text, i, file.name);
+        const data = parseInvoiceFromText(text, i, file.name, firmVatId);
         results.push(data);
       }
     } catch (error) {

@@ -142,6 +142,9 @@ export function SalesVerificationTab() {
       let allExtractedPdfs: ExtractedSalesPdfData[] = [];
       const totalFiles = pdfFiles.length + scannedPdfFiles.length;
 
+      // Determine effective firm VAT ID for extraction disambiguation
+      const effectiveFirmVatId = supplierIdInput.trim() || firmVatId;
+
       // Phase 1: Extract native PDFs
       if (pdfFiles.length > 0) {
         setExtractionPhase('native');
@@ -153,7 +156,8 @@ export function SalesVerificationTab() {
             if (fileName) {
               setCurrentFileName(fileName);
             }
-          }
+          },
+          effectiveFirmVatId
         );
         allExtractedPdfs = [...nativeExtracted];
       }
@@ -177,8 +181,6 @@ export function SalesVerificationTab() {
 
       setIsExtracting(false);
 
-      // Use manually entered supplier ID if provided, otherwise use auto-detected from Excel
-      const effectiveFirmVatId = supplierIdInput.trim() || firmVatId;
       const result = runSalesVerification(allExtractedPdfs, excelData, effectiveFirmVatId);
       setVerificationResult(result);
 
