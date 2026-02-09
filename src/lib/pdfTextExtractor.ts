@@ -59,12 +59,9 @@ export function parseInvoiceFromText(
   const documentDate = extractDate(normalizedText);
   console.log(`[PDF Extract] Document date:`, documentDate);
 
-  // Extract seller ID (our firm's VAT number)
-  const sellerId = extractSellerId(normalizedText);
+  // Extract seller and client IDs as a coordinated pair to avoid swapping
+  const { sellerId, clientId } = extractSellerAndClientIds(normalizedText);
   console.log(`[PDF Extract] Seller ID:`, sellerId);
-
-  // Extract client ID (buyer's VAT or EIK number)
-  const clientId = extractClientId(normalizedText);
   console.log(`[PDF Extract] Client ID:`, clientId);
 
   // Extract client name
@@ -186,11 +183,65 @@ function extractDate(text: string): string | null {
 }
 
 /**
- * Extract seller ID (our firm's VAT number).
- * Usually appears after "Доставчик", "Издател", "Продавач" or similar.
+ * Extract seller and client IDs as a coordinated pair.
+ * This prevents the seller fallback from consuming the client's ID.
  */
-function extractSellerId(text: string): string | null {
-  // Look for seller/supplier section with VAT number
+function extractSellerAndClientIds(text: string): { sellerId: string | null; clientId: string | null } {
+  // Try section-based extraction first (most reliable)
+  const sellerId = extractSellerIdFromSection(text);
+  const clientId = extractClientIdFromSection(text);
+
+  // If both found, return them
+  if (sellerId && clientId) {
+    return { sellerId, clientId };
+  }
+
+  // If only one found via sections, try to find the other from all BG numbers
+  const allBgNumbers = [...text.matchAll(/BG\s*(\d{9,10})/gi)]
+    .map(m => 'BG' + m[1]);
+
+  if (sellerId && !clientId) {
+    // Client is the first BG number that isn't the seller, or an EIK
+    const clientBg = allBgNumbers.find(bg => bg.toUpperCase() !== sellerId.toUpperCase());
+    if (clientBg) return { sellerId, clientId: clientBg };
+
+    // Try EIK fallback for client
+    const eikMatch = text.match(/еик[:\s]*(\d{9,13})/i);
+    return { sellerId, clientId: eikMatch ? eikMatch[1] : null };
+  }
+
+  if (!sellerId && clientId) {
+    // Seller is the first BG number that isn't the client
+    const sellerBg = allBgNumbers.find(bg => bg.toUpperCase() !== clientId.toUpperCase());
+    return { sellerId: sellerBg || null, clientId };
+  }
+
+  // Neither found via sections — use positional heuristic:
+  // On Bulgarian invoices, seller typically appears before client
+  if (allBgNumbers.length >= 2) {
+    return { sellerId: allBgNumbers[0], clientId: allBgNumbers[1] };
+  }
+  if (allBgNumbers.length === 1) {
+    // Only one BG number — can't reliably assign. Try EIK for the other.
+    const eikMatch = text.match(/еик[:\s]*(\d{9,13})/i);
+    if (eikMatch) {
+      return { sellerId: allBgNumbers[0], clientId: eikMatch[1] };
+    }
+    return { sellerId: allBgNumbers[0], clientId: null };
+  }
+
+  // No BG numbers at all
+  const eikMatches = [...text.matchAll(/еик[:\s]*(\d{9,13})/gi)];
+  return {
+    sellerId: null,
+    clientId: eikMatches.length > 0 ? eikMatches[0][1] : null,
+  };
+}
+
+/**
+ * Extract seller ID from dedicated seller section.
+ */
+function extractSellerIdFromSection(text: string): string | null {
   const sellerPatterns = [
     /доставчик[^]*?ин\s*ддс\s*[:\s]*(BG\s*\d{9,10})/i,
     /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?(?:ддс|vat|идент)[^:]*[:\s]*(BG\d{9,10})/i,
@@ -204,29 +255,21 @@ function extractSellerId(text: string): string | null {
     }
   }
 
-  // Fallback: first BG number found (usually the seller)
-  const firstBgMatch = text.match(/BG\s*(\d{9,10})/i);
-  if (firstBgMatch) {
-    return 'BG' + firstBgMatch[1];
-  }
-
   return null;
 }
 
 /**
- * Extract client ID (buyer's VAT or EIK number).
+ * Extract client ID from dedicated client section.
  */
-function extractClientId(text: string): string | null {
+function extractClientIdFromSection(text: string): string | null {
   // Try to isolate the client section
   let clientSection = '';
 
-  // Pattern 1: "Клиент: ..."
   const clientSectionMatch1 = text.match(/клиент[^]*?(?=доставчик|supplier|фактура\s*№|$)/i);
   if (clientSectionMatch1) {
     clientSection = clientSectionMatch1[0];
   }
 
-  // Pattern 2: "Получател: ..."
   if (!clientSection) {
     const clientSectionMatch2 = text.match(/получател[^]*?(?=доставчик|seller|$)/i);
     if (clientSectionMatch2) {
@@ -236,29 +279,19 @@ function extractClientId(text: string): string | null {
 
   if (clientSection) {
     const inDdsMatch = clientSection.match(/ин\s*ддс\s*[:\s]*(BG\s*\d{9,10})/i);
-    if (inDdsMatch) {
-      return inDdsMatch[1].replace(/\s/g, '').toUpperCase();
-    }
+    if (inDdsMatch) return inDdsMatch[1].replace(/\s/g, '').toUpperCase();
 
     const identMatch = clientSection.match(/идент\.?\s*№?\s*[:\s]*(\d{9,13})/i);
-    if (identMatch) {
-      return identMatch[1];
-    }
+    if (identMatch) return identMatch[1];
 
     const eikInClientMatch = clientSection.match(/еик[:\s]*(\d{9,13})/i);
-    if (eikInClientMatch) {
-      return eikInClientMatch[1];
-    }
+    if (eikInClientMatch) return eikInClientMatch[1];
 
     const vatInClientMatch = clientSection.match(/(?:ддс|vat)[^:]*[:\s]*(BG\s*\d{9,10})/i);
-    if (vatInClientMatch) {
-      return vatInClientMatch[1].replace(/\s/g, '').toUpperCase();
-    }
+    if (vatInClientMatch) return vatInClientMatch[1].replace(/\s/g, '').toUpperCase();
 
     const bgInClientMatch = clientSection.match(/BG\s*(\d{9,10})/i);
-    if (bgInClientMatch) {
-      return 'BG' + bgInClientMatch[1];
-    }
+    if (bgInClientMatch) return 'BG' + bgInClientMatch[1];
   }
 
   // Fallback patterns
@@ -275,12 +308,6 @@ function extractClientId(text: string): string | null {
       const id = match[1].replace(/\s/g, '');
       return id.match(/^BG/i) ? id.toUpperCase() : id;
     }
-  }
-
-  // Last resort: look for first EIK
-  const allEikMatches = [...text.matchAll(/еик[:\s]*(\d{9,13})/gi)];
-  if (allEikMatches.length > 0) {
-    return allEikMatches[0][1];
   }
 
   return null;
@@ -317,13 +344,16 @@ function extractAmounts(text: string): {
   let vat: number | null = null;
   let vatRate: number | null = null;
 
-  // PRIORITY: Look for EUR amounts first (when both BGN and EUR are present)
-  const taxBaseEurPatterns = [
-    /данъчна основа[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-    /tax base[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
+  // PRIORITY: Look for BGN amounts first (sales journal uses BGN)
+  const taxBaseBgnPatterns = [
+    /данъчна основа[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
+    /данъчна основа[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /данъчна основа[^\d]*?([\d]+[.,][\d]{2})/i,
+    /tax base[^\d]*?([\d]+[.,][\d]{2})/i,
+    /д\.о\.[^\d]*?([\d]+[.,][\d]{2})/i,
   ];
 
-  for (const pattern of taxBaseEurPatterns) {
+  for (const pattern of taxBaseBgnPatterns) {
     const match = text.match(pattern);
     if (match) {
       taxBase = parseAmountFromText(match[1]);
@@ -331,57 +361,20 @@ function extractAmounts(text: string): {
     }
   }
 
-  // If no EUR found, fallback to BGN patterns
-  if (taxBase === null) {
-    const taxBaseBgnPatterns = [
-      /данъчна основа[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
-      /данъчна основа[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
-      /данъчна основа[^\d]*?([\d]+[.,][\d]{2})/i,
-      /tax base[^\d]*?([\d]+[.,][\d]{2})/i,
-      /д\.о\.[^\d]*?([\d]+[.,][\d]{2})/i,
-    ];
-
-    for (const pattern of taxBaseBgnPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        taxBase = parseAmountFromText(match[1]);
-        if (taxBase !== null && taxBase > 0) break;
-      }
-    }
-  }
-
-  // VAT - EUR priority patterns
-  const vatEurPatterns = [
-    /начислен\s*ддс[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-    /ддс\s*\([^)]*\)[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-    /ддс[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-    /vat[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
+  // VAT - BGN priority patterns
+  const vatBgnPatterns = [
+    /начислен\s*ддс[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
+    /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /ддс\s*\([^)]*\)[^\d]*?([\d]+[.,][\d]{2})/i,
+    /(?:начислен\s+)?ддс[^\d]*?([\d]+[.,][\d]{2})/i,
+    /vat[^\d]*?([\d]+[.,][\d]{2})/i,
   ];
 
-  for (const pattern of vatEurPatterns) {
+  for (const pattern of vatBgnPatterns) {
     const match = text.match(pattern);
     if (match) {
       vat = parseAmountFromText(match[1]);
       if (vat !== null && vat > 0) break;
-    }
-  }
-
-  // If no EUR found, fallback to BGN patterns
-  if (vat === null) {
-    const vatBgnPatterns = [
-      /начислен\s*ддс[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
-      /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
-      /ддс\s*\([^)]*\)[^\d]*?([\d]+[.,][\d]{2})/i,
-      /(?:начислен\s+)?ддс[^\d]*?([\d]+[.,][\d]{2})/i,
-      /vat[^\d]*?([\d]+[.,][\d]{2})/i,
-    ];
-
-    for (const pattern of vatBgnPatterns) {
-      const match = text.match(pattern);
-      if (match) {
-        vat = parseAmountFromText(match[1]);
-        if (vat !== null && vat > 0) break;
-      }
     }
   }
 

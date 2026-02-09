@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { FileCheck, FileSpreadsheet, ArrowRight, Loader2, RefreshCw, AlertCircle, Download, AlertTriangle, CheckCircle2, ScanLine } from 'lucide-react';
+import { FileCheck, FileSpreadsheet, ArrowRight, Loader2, RefreshCw, AlertCircle, Download, AlertTriangle, CheckCircle2, ScanLine, Building2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { FileUpload } from '@/components/FileUpload';
@@ -25,6 +25,7 @@ export function SalesVerificationTab() {
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [excelData, setExcelData] = useState<SalesExcelRow[]>([]);
   const [firmVatId, setFirmVatId] = useState<string | null>(null);
+  const [supplierIdInput, setSupplierIdInput] = useState<string>('');
   const [pdfFiles, setPdfFiles] = useState<File[]>([]);
   const [scannedPdfFiles, setScannedPdfFiles] = useState<File[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -176,8 +177,9 @@ export function SalesVerificationTab() {
 
       setIsExtracting(false);
 
-      // Run verification with firm VAT ID
-      const result = runSalesVerification(allExtractedPdfs, excelData, firmVatId);
+      // Use manually entered supplier ID if provided, otherwise use auto-detected from Excel
+      const effectiveFirmVatId = supplierIdInput.trim() || firmVatId;
+      const result = runSalesVerification(allExtractedPdfs, excelData, effectiveFirmVatId);
       setVerificationResult(result);
 
       const scannedCount = scannedPdfFiles.length;
@@ -202,6 +204,7 @@ export function SalesVerificationTab() {
   const handleClear = () => {
     setExcelFile(null);
     setExcelData([]);
+    setSupplierIdInput('');
     setPdfFiles([]);
     setScannedPdfFiles([]);
     setVerificationResult(null);
@@ -256,6 +259,44 @@ export function SalesVerificationTab() {
             selectedFile={null}
             onClear={() => {}}
           />
+        )}
+      </div>
+
+      {/* Supplier ID Input */}
+      <div className="p-6 md:p-8 border-b border-border">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 rounded-lg bg-primary/10">
+            <Building2 className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="font-serif font-semibold text-lg text-foreground">
+              ИН по ЗДДС на доставчика
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Вашият ДДС номер (доставчик / продавач)
+              {firmVatId && (
+                <span className="ml-1 text-emerald-600 dark:text-emerald-400">
+                  — от Excel: {firmVatId}
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <input
+          type="text"
+          value={supplierIdInput}
+          onChange={(e) => setSupplierIdInput(e.target.value)}
+          placeholder={firmVatId || 'BG123456789'}
+          disabled={isLoading}
+          className="w-full px-4 py-2.5 rounded-lg border border-border bg-background text-foreground
+            placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50
+            disabled:opacity-50 text-sm"
+        />
+        {!supplierIdInput && firmVatId && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Ще се използва автоматично откритият: {firmVatId}
+          </p>
         )}
       </div>
 
@@ -516,6 +557,16 @@ export function SalesVerificationTab() {
               </div>
               <p className="text-2xl font-bold text-blue-600">{verificationResult.missingPdfCount}</p>
             </div>
+
+            {verificationResult.failedExtractionCount > 0 && (
+              <div className="p-4 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="h-4 w-4 text-red-600" />
+                  <span className="text-sm text-red-700 dark:text-red-400">Неуспешни PDF</span>
+                </div>
+                <p className="text-2xl font-bold text-red-600">{verificationResult.failedExtractionCount}</p>
+              </div>
+            )}
           </div>
 
           <SalesComparisonResults summary={verificationResult} />

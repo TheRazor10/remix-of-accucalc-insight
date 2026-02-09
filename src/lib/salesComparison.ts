@@ -11,58 +11,13 @@ import {
 import { normalizeSalesDocumentNumber, salesDatesMatch, runExcelInternalChecks } from './salesJournalParser';
 
 /**
- * Compare a single PDF invoice with Excel data.
+ * Build a comparison result for a matched PDF-Excel pair.
  */
-export function compareSalesPdfWithExcel(
+function buildComparisonResult(
   pdfData: ExtractedSalesPdfData,
-  excelRows: SalesExcelRow[],
-  firmVatId: string | null = null,
-  excludeRows: Set<number> = new Set()
+  matchedRow: SalesExcelRow,
+  firmVatId: string | null = null
 ): SalesComparisonResult {
-  const normalizedPdfNumber = normalizeSalesDocumentNumber(pdfData.documentNumber);
-
-  console.log(`[Sales Comparison] Looking for PDF: "${pdfData.documentNumber}" (normalized: "${normalizedPdfNumber}")`);
-
-  let matchedRow: SalesExcelRow | null = null;
-
-  // Phase 1: Exact document number match
-  for (const row of excelRows) {
-    if (excludeRows.has(row.rowIndex)) continue;
-
-    const normalizedExcelNumber = normalizeSalesDocumentNumber(row.documentNumber);
-
-    if (normalizedExcelNumber === normalizedPdfNumber && normalizedPdfNumber !== '') {
-      console.log(`  [Exact Match] Row ${row.rowIndex}`);
-      matchedRow = row;
-      break;
-    }
-  }
-
-  // Phase 2: Best match fallback
-  if (!matchedRow) {
-    console.log(`  [No Exact Match] Trying best match...`);
-    const bestMatch = findBestSalesMatch(pdfData, excelRows, excludeRows);
-
-    if (bestMatch) {
-      console.log(`  [Best Match] Row ${bestMatch.row.rowIndex} with ${bestMatch.mismatches} mismatches`);
-      matchedRow = bestMatch.row;
-    }
-  }
-
-  // No match found
-  if (!matchedRow) {
-    console.log(`  [Not Found] No matching Excel row`);
-    return {
-      pdfFileName: pdfData.fileName,
-      pdfIndex: pdfData.pdfIndex,
-      matchedExcelRow: null,
-      extractedData: pdfData,
-      fieldComparisons: [],
-      overallStatus: 'not_found',
-    };
-  }
-
-  // Build field comparisons
   const fieldComparisons: SalesFieldComparison[] = [];
 
   // 1. Document Type
@@ -95,10 +50,7 @@ export function compareSalesPdfWithExcel(
   // 4. Client ID (buyer's VAT/EIK)
   const isPhysicalIndividual = isPhysicalIndividualId(matchedRow.counterpartyId);
 
-  console.log(`[Sales Comparison] Client ID check - Excel: "${matchedRow.counterpartyId}", isPhysicalIndividual: ${isPhysicalIndividual}`);
-
   if (isPhysicalIndividual) {
-    console.log(`  [Physical Individual] Marking Client VAT/EIK as match (skipping comparison)`);
     fieldComparisons.push({
       fieldName: 'clientId',
       fieldLabel: 'Client VAT/EIK',
@@ -123,7 +75,7 @@ export function compareSalesPdfWithExcel(
     );
   }
 
-  // 6. Tax Base Amount
+  // 5. Tax Base Amount
   fieldComparisons.push(
     compareSalesAmount(
       'taxBase',
@@ -133,7 +85,7 @@ export function compareSalesPdfWithExcel(
     )
   );
 
-  // 7. VAT Amount
+  // 6. VAT Amount
   fieldComparisons.push(
     compareSalesAmount(
       'vat',
@@ -143,7 +95,6 @@ export function compareSalesPdfWithExcel(
     )
   );
 
-  // Determine overall status
   const hasMismatch = fieldComparisons.some(fc => fc.status === 'suspicious');
 
   return {
@@ -157,7 +108,15 @@ export function compareSalesPdfWithExcel(
 }
 
 /**
+ * Maximum allowed mismatches for best-match fallback.
+ * With 6 total fields, allowing at most 3 mismatches prevents
+ * completely unrelated rows from being matched.
+ */
+const MAX_BEST_MATCH_MISMATCHES = 3;
+
+/**
  * Find best matching Excel row for a PDF.
+ * Returns null if no row has fewer than MAX_BEST_MATCH_MISMATCHES mismatches.
  */
 function findBestSalesMatch(
   pdfData: ExtractedSalesPdfData,
@@ -170,6 +129,8 @@ function findBestSalesMatch(
     if (excludeRows.has(row.rowIndex)) continue;
 
     const mismatches = countSalesMismatches(pdfData, row);
+
+    if (mismatches > MAX_BEST_MATCH_MISMATCHES) continue;
 
     if (!bestMatch || mismatches < bestMatch.mismatches) {
       bestMatch = { row, mismatches };
@@ -322,30 +283,67 @@ function compareSalesAmount(
 
 /**
  * Run complete sales verification.
+ * Uses two-pass matching: exact document number matches first, then best-match fallback.
  */
 export function runSalesVerification(
   extractedPdfs: ExtractedSalesPdfData[],
   excelRows: SalesExcelRow[],
   firmVatId: string | null = null
 ): SalesVerificationSummary {
-  const comparisons: SalesComparisonResult[] = [];
+  const comparisons: (SalesComparisonResult | null)[] = new Array(extractedPdfs.length).fill(null);
   const claimedRows = new Set<number>();
 
   // Filter Excel rows to only include verifiable document types (Ф-ра, КИ, ДИ)
   const verifiableExcelRows = excelRows.filter(row => isVerifiableDocumentType(row.documentType));
-  const excludedRows = excelRows.filter(row => !isVerifiableDocumentType(row.documentType));
 
-  console.log(`[Sales Verification] Total Excel rows: ${excelRows.length}, Verifiable: ${verifiableExcelRows.length}, Excluded (ПЗДДС etc.): ${excludedRows.length}`);
+  console.log(`[Sales Verification] Total Excel rows: ${excelRows.length}, Verifiable: ${verifiableExcelRows.length}, Excluded (ПЗДДС etc.): ${excelRows.length - verifiableExcelRows.length}`);
 
-  // Compare each PDF with verifiable Excel rows only
-  for (const pdf of extractedPdfs) {
-    const result = compareSalesPdfWithExcel(pdf, verifiableExcelRows, firmVatId, claimedRows);
-    comparisons.push(result);
+  // Pass 1: Exact document number matches only
+  console.log(`[Sales Verification] Pass 1: Exact matches`);
+  for (let i = 0; i < extractedPdfs.length; i++) {
+    const pdf = extractedPdfs[i];
+    const normalizedPdfNumber = normalizeSalesDocumentNumber(pdf.documentNumber);
+    if (normalizedPdfNumber === '') continue;
 
-    if (result.matchedExcelRow !== null) {
-      claimedRows.add(result.matchedExcelRow);
+    for (const row of verifiableExcelRows) {
+      if (claimedRows.has(row.rowIndex)) continue;
+      const normalizedExcelNumber = normalizeSalesDocumentNumber(row.documentNumber);
+      if (normalizedExcelNumber === normalizedPdfNumber) {
+        console.log(`  [Pass 1] PDF "${pdf.fileName}" exact match -> Row ${row.rowIndex}`);
+        const result = buildComparisonResult(pdf, row, firmVatId);
+        comparisons[i] = result;
+        claimedRows.add(row.rowIndex);
+        break;
+      }
     }
   }
+
+  // Pass 2: Best-match fallback for unmatched PDFs
+  console.log(`[Sales Verification] Pass 2: Best-match fallback`);
+  for (let i = 0; i < extractedPdfs.length; i++) {
+    if (comparisons[i] !== null) continue;
+    const pdf = extractedPdfs[i];
+
+    const bestMatch = findBestSalesMatch(pdf, verifiableExcelRows, claimedRows);
+    if (bestMatch) {
+      console.log(`  [Pass 2] PDF "${pdf.fileName}" best match -> Row ${bestMatch.row.rowIndex} (${bestMatch.mismatches} mismatches)`);
+      const result = buildComparisonResult(pdf, bestMatch.row, firmVatId);
+      comparisons[i] = result;
+      claimedRows.add(bestMatch.row.rowIndex);
+    } else {
+      console.log(`  [Pass 2] PDF "${pdf.fileName}" -> Not Found`);
+      comparisons[i] = {
+        pdfFileName: pdf.fileName,
+        pdfIndex: pdf.pdfIndex,
+        matchedExcelRow: null,
+        extractedData: pdf,
+        fieldComparisons: [],
+        overallStatus: 'not_found',
+      };
+    }
+  }
+
+  const finalComparisons = comparisons as SalesComparisonResult[];
 
   // Find missing PDFs (verifiable Excel rows with no matching PDF)
   // Also filter out foreign firms (non-BG VAT IDs) as they belong in Purchases
@@ -362,10 +360,23 @@ export function runSalesVerification(
   // Run internal Excel checks on ALL rows (including non-verifiable for sequence checks)
   const excelChecks = runExcelInternalChecks(excelRows);
 
+  // Detect failed extractions (PDFs where all key fields are null)
+  const failedExtractionFiles: string[] = [];
+  for (const pdf of extractedPdfs) {
+    const allNull = pdf.documentNumber === null &&
+                    pdf.documentDate === null &&
+                    pdf.clientId === null &&
+                    pdf.taxBaseAmount === null &&
+                    pdf.vatAmount === null;
+    if (allNull) {
+      failedExtractionFiles.push(pdf.fileName);
+    }
+  }
+
   // Count results
-  const matchedCount = comparisons.filter(c => c.overallStatus === 'match').length;
-  const suspiciousCount = comparisons.filter(c => c.overallStatus === 'suspicious').length;
-  const notFoundCount = comparisons.filter(c => c.overallStatus === 'not_found').length;
+  const matchedCount = finalComparisons.filter(c => c.overallStatus === 'match').length;
+  const suspiciousCount = finalComparisons.filter(c => c.overallStatus === 'suspicious').length;
+  const notFoundCount = finalComparisons.filter(c => c.overallStatus === 'not_found').length;
   const excelCheckErrors = excelChecks.filter(c => c.status === 'error').length;
   const excelCheckWarnings = excelChecks.filter(c => c.status === 'warning').length;
 
@@ -376,7 +387,9 @@ export function runSalesVerification(
     suspiciousCount,
     notFoundCount,
     missingPdfCount: missingPdfRows.length,
-    comparisons,
+    failedExtractionCount: failedExtractionFiles.length,
+    failedExtractionFiles,
+    comparisons: finalComparisons,
     missingPdfRows,
     excelChecks,
     excelCheckErrors,

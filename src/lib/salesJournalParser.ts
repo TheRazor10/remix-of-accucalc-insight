@@ -148,38 +148,38 @@ export function runExcelInternalChecks(rows: SalesExcelRow[]): ExcelInternalChec
   const documentNumbers: Map<string, { num: number; rowIndex: number; date: string }[]> = new Map();
 
   for (const row of rows) {
-    // Check 1: Column 9 (totalTaxBase) should equal Column 11 (taxBase20)
-    if (row.totalTaxBase !== null && row.taxBase20 !== null) {
+    // Check 1: Column 9 (totalTaxBase) should equal sum of all rate bases (20% + 9% + 0%)
+    if (row.totalTaxBase !== null) {
       const col9 = Math.round(row.totalTaxBase * 100) / 100;
-      const col11 = Math.round(row.taxBase20 * 100) / 100;
+      const sumBases = Math.round(((row.taxBase20 || 0) + (row.taxBase9 || 0) + (row.taxBase0 || 0)) * 100) / 100;
       const tolerance = 0.02;
 
-      if (Math.abs(col9 - col11) > tolerance) {
+      if (Math.abs(col9 - sumBases) > tolerance) {
         results.push({
           rowIndex: row.rowIndex,
           documentNumber: row.documentNumber,
           checkType: 'total_mismatch',
-          description: 'Column 9 (Total Tax Base) does not match Column 11 (Tax Base 20%)',
-          expectedValue: col11.toFixed(2),
+          description: 'Total Tax Base does not match sum of rate bases (20% + 9% + 0%)',
+          expectedValue: sumBases.toFixed(2),
           actualValue: col9.toFixed(2),
           status: 'error',
         });
       }
     }
 
-    // Check 2: Column 10 (totalVat) should equal Column 12 (vat20)
-    if (row.totalVat !== null && row.vat20 !== null) {
+    // Check 2: Column 10 (totalVat) should equal sum of all VAT amounts (20% + 9%)
+    if (row.totalVat !== null) {
       const col10 = Math.round(row.totalVat * 100) / 100;
-      const col12 = Math.round(row.vat20 * 100) / 100;
+      const sumVat = Math.round(((row.vat20 || 0) + (row.vat9 || 0)) * 100) / 100;
       const tolerance = 0.02;
 
-      if (Math.abs(col10 - col12) > tolerance) {
+      if (Math.abs(col10 - sumVat) > tolerance) {
         results.push({
           rowIndex: row.rowIndex,
           documentNumber: row.documentNumber,
           checkType: 'total_mismatch',
-          description: 'Column 10 (Total VAT) does not match Column 12 (VAT 20%)',
-          expectedValue: col12.toFixed(2),
+          description: 'Total VAT does not match sum of VAT amounts (20% + 9%)',
+          expectedValue: sumVat.toFixed(2),
           actualValue: col10.toFixed(2),
           status: 'error',
         });

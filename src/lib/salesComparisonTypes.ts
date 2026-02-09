@@ -102,6 +102,8 @@ export interface SalesVerificationSummary {
   suspiciousCount: number;
   notFoundCount: number;
   missingPdfCount: number;
+  failedExtractionCount: number;         // PDFs where extraction failed entirely
+  failedExtractionFiles: string[];       // File names of failed PDFs
   comparisons: SalesComparisonResult[];
   missingPdfRows: SalesExcelRow[];  // Excel rows with no matching PDF
 
@@ -129,12 +131,11 @@ export const VERIFIABLE_DOCUMENT_TYPES = ['Ф-ра', 'КИ', 'ДИ'];
 
 /**
  * Check if a document type requires PDF verification.
+ * Uses exact match (case-insensitive) to avoid false positives from substring matching.
  */
 export function isVerifiableDocumentType(docType: string): boolean {
-  return VERIFIABLE_DOCUMENT_TYPES.some(t =>
-    docType.toUpperCase().includes(t.toUpperCase()) ||
-    docType.toUpperCase() === t.toUpperCase()
-  );
+  const normalized = docType.trim().toUpperCase();
+  return VERIFIABLE_DOCUMENT_TYPES.some(t => normalized === t.toUpperCase());
 }
 
 /**

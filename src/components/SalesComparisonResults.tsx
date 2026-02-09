@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { CheckCircle2, AlertTriangle, AlertCircle, FileQuestion, ChevronDown, ChevronUp, FileSpreadsheet, User, FileX2, ScanLine } from 'lucide-react';
-import { SalesVerificationSummary, SalesComparisonResult, ExcelInternalCheckResult } from '@/lib/salesComparisonTypes';
+import { SalesVerificationSummary, SalesComparisonResult, ExcelInternalCheckResult, isPhysicalIndividualId } from '@/lib/salesComparisonTypes';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -16,16 +16,6 @@ function isCreditNote(comparison: SalesComparisonResult): boolean {
   return docType.includes('КРЕДИТНО') ||
          docType.includes('CREDIT') ||
          excelDocType === 'КИ';
-}
-
-// Check if a client ID represents a physical individual (placeholder ID)
-function isPhysicalIndividual(clientId: string | null): boolean {
-  if (!clientId) return false;
-  const normalized = clientId.replace(/\s/g, '');
-  return /^9{6,}$/.test(normalized) ||
-         /^0{6,}$/.test(normalized) ||
-         normalized === 'ФИЗЛИЦЕ' ||
-         normalized === 'ФИЗ.ЛИЦЕ';
 }
 
 export function SalesComparisonResults({ summary }: SalesComparisonResultsProps) {
@@ -54,22 +44,24 @@ export function SalesComparisonResults({ summary }: SalesComparisonResultsProps)
   };
 
   const { regularComparisons, physicalIndividualComparisons, creditNoteComparisons, scannedComparisons } = useMemo(() => {
-    const regular: SalesComparisonResult[] = [];
-    const physical: SalesComparisonResult[] = [];
-    const creditNotes: SalesComparisonResult[] = [];
-    const scanned: SalesComparisonResult[] = [];
+    const regular: { comparison: SalesComparisonResult; globalIndex: number }[] = [];
+    const physical: { comparison: SalesComparisonResult; globalIndex: number }[] = [];
+    const creditNotes: { comparison: SalesComparisonResult; globalIndex: number }[] = [];
+    const scanned: { comparison: SalesComparisonResult; globalIndex: number }[] = [];
 
-    for (const comparison of summary.comparisons) {
+    for (let i = 0; i < summary.comparisons.length; i++) {
+      const comparison = summary.comparisons[i];
+      const entry = { comparison, globalIndex: i };
       const excelClientId = comparison.fieldComparisons.find(f => f.fieldName === 'clientId')?.excelValue;
 
       if (isFailedScannedPdf(comparison)) {
-        scanned.push(comparison);
+        scanned.push(entry);
       } else if (isCreditNote(comparison)) {
-        creditNotes.push(comparison);
-      } else if (isPhysicalIndividual(excelClientId)) {
-        physical.push(comparison);
+        creditNotes.push(entry);
+      } else if (isPhysicalIndividualId(excelClientId)) {
+        physical.push(entry);
       } else {
-        regular.push(comparison);
+        regular.push(entry);
       }
     }
 
@@ -169,6 +161,30 @@ export function SalesComparisonResults({ summary }: SalesComparisonResultsProps)
         </div>
       )}
 
+      {/* Failed PDF Extractions Section */}
+      {summary.failedExtractionCount > 0 && (
+        <div className="border border-red-200 dark:border-red-800 rounded-lg overflow-hidden bg-red-50/50 dark:bg-red-950/20">
+          <div className="p-4">
+            <div className="flex items-center gap-3 mb-2">
+              <AlertCircle className="h-5 w-5 text-red-500" />
+              <span className="font-medium">
+                Неуспешно извличане ({summary.failedExtractionCount} PDF)
+              </span>
+            </div>
+            <p className="text-sm text-muted-foreground mb-3">
+              Тези PDF файлове не можаха да бъдат прочетени. Проверете ги ръчно.
+            </p>
+            <div className="space-y-1">
+              {summary.failedExtractionFiles.map((fileName, idx) => (
+                <p key={idx} className="text-sm p-2 rounded bg-red-100/50 dark:bg-red-900/20 text-red-700 dark:text-red-400">
+                  {fileName}
+                </p>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Missing PDFs Section */}
       {summary.missingPdfRows.length > 0 && (
         <div className="border border-border rounded-lg overflow-hidden">
@@ -223,22 +239,19 @@ export function SalesComparisonResults({ summary }: SalesComparisonResultsProps)
 
           {showCreditNotes && (
             <div className="border-t border-rose-200/50 dark:border-rose-800/50 p-4 space-y-3 bg-background/50">
-              {creditNoteComparisons.map((comparison) => {
-                const globalIndex = summary.comparisons.indexOf(comparison);
-                return (
-                  <ComparisonItem
-                    key={globalIndex}
-                    comparison={comparison}
-                    index={globalIndex}
-                    isExpanded={expandedItems.has(globalIndex)}
-                    onToggle={() => toggleExpanded(globalIndex)}
-                    getStatusIcon={getStatusIcon}
-                    getStatusLabel={getStatusLabel}
-                    getStatusBg={getStatusBg}
-                    showNegativeAmounts={true}
-                  />
-                );
-              })}
+              {creditNoteComparisons.map(({ comparison, globalIndex }) => (
+                <ComparisonItem
+                  key={globalIndex}
+                  comparison={comparison}
+                  index={globalIndex}
+                  isExpanded={expandedItems.has(globalIndex)}
+                  onToggle={() => toggleExpanded(globalIndex)}
+                  getStatusIcon={getStatusIcon}
+                  getStatusLabel={getStatusLabel}
+                  getStatusBg={getStatusBg}
+                  showNegativeAmounts={true}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -271,22 +284,19 @@ export function SalesComparisonResults({ summary }: SalesComparisonResultsProps)
                 Автоматичната проверка не може да извлече всички данни.
                 Моля, проверете ги ръчно.
               </p>
-              {scannedComparisons.map((comparison) => {
-                const globalIndex = summary.comparisons.indexOf(comparison);
-                return (
-                  <ComparisonItem
-                    key={globalIndex}
-                    comparison={comparison}
-                    index={globalIndex}
-                    isExpanded={expandedItems.has(globalIndex)}
-                    onToggle={() => toggleExpanded(globalIndex)}
-                    getStatusIcon={getStatusIcon}
-                    getStatusLabel={getStatusLabel}
-                    getStatusBg={getStatusBg}
-                    isScanned={true}
-                  />
-                );
-              })}
+              {scannedComparisons.map(({ comparison, globalIndex }) => (
+                <ComparisonItem
+                  key={globalIndex}
+                  comparison={comparison}
+                  index={globalIndex}
+                  isExpanded={expandedItems.has(globalIndex)}
+                  onToggle={() => toggleExpanded(globalIndex)}
+                  getStatusIcon={getStatusIcon}
+                  getStatusLabel={getStatusLabel}
+                  getStatusBg={getStatusBg}
+                  isScanned={true}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -314,21 +324,18 @@ export function SalesComparisonResults({ summary }: SalesComparisonResultsProps)
 
           {showPhysicalIndividuals && (
             <div className="border-t border-blue-200/50 dark:border-blue-800/50 p-4 space-y-3 bg-background/50">
-              {physicalIndividualComparisons.map((comparison) => {
-                const globalIndex = summary.comparisons.indexOf(comparison);
-                return (
-                  <ComparisonItem
-                    key={globalIndex}
-                    comparison={comparison}
-                    index={globalIndex}
-                    isExpanded={expandedItems.has(globalIndex)}
-                    onToggle={() => toggleExpanded(globalIndex)}
-                    getStatusIcon={getStatusIcon}
-                    getStatusLabel={getStatusLabel}
-                    getStatusBg={getStatusBg}
-                  />
-                );
-              })}
+              {physicalIndividualComparisons.map(({ comparison, globalIndex }) => (
+                <ComparisonItem
+                  key={globalIndex}
+                  comparison={comparison}
+                  index={globalIndex}
+                  isExpanded={expandedItems.has(globalIndex)}
+                  onToggle={() => toggleExpanded(globalIndex)}
+                  getStatusIcon={getStatusIcon}
+                  getStatusLabel={getStatusLabel}
+                  getStatusBg={getStatusBg}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -345,21 +352,18 @@ export function SalesComparisonResults({ summary }: SalesComparisonResultsProps)
           )}
         </h3>
 
-        {regularComparisons.map((comparison) => {
-          const globalIndex = summary.comparisons.indexOf(comparison);
-          return (
-            <ComparisonItem
-              key={globalIndex}
-              comparison={comparison}
-              index={globalIndex}
-              isExpanded={expandedItems.has(globalIndex)}
-              onToggle={() => toggleExpanded(globalIndex)}
-              getStatusIcon={getStatusIcon}
-              getStatusLabel={getStatusLabel}
-              getStatusBg={getStatusBg}
-            />
-          );
-        })}
+        {regularComparisons.map(({ comparison, globalIndex }) => (
+          <ComparisonItem
+            key={globalIndex}
+            comparison={comparison}
+            index={globalIndex}
+            isExpanded={expandedItems.has(globalIndex)}
+            onToggle={() => toggleExpanded(globalIndex)}
+            getStatusIcon={getStatusIcon}
+            getStatusLabel={getStatusLabel}
+            getStatusBg={getStatusBg}
+          />
+        ))}
 
         {regularComparisons.length === 0 && (
           <p className="text-sm text-muted-foreground p-4 text-center border rounded-lg">

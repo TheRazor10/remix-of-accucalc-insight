@@ -135,16 +135,24 @@ export async function exportSalesVerificationResults(
     }
   }
 
-  // Add status values for each data row
+  // Add status values for each data row, with document number validation
   let statusesAdded = 0;
+  let statusesSkipped = 0;
   for (const [rowIndex, status] of statusMap.entries()) {
     // rowIndex is 1-indexed (Excel row number)
     const worksheetRow = rowIndex - 1;
 
     if (worksheetRow >= 0 && worksheetRow <= range.e.r) {
-      const cellAddress = XLSX.utils.encode_cell({ r: worksheetRow, c: statusColIndex });
-      worksheet[cellAddress] = { t: 's', v: status };
-      statusesAdded++;
+      // Validate: check that the row has data in the document number column (column 3, 0-indexed)
+      const docNumCell = worksheet[XLSX.utils.encode_cell({ r: worksheetRow, c: 3 })];
+      if (docNumCell && docNumCell.v !== undefined && docNumCell.v !== null && docNumCell.v !== '') {
+        const cellAddress = XLSX.utils.encode_cell({ r: worksheetRow, c: statusColIndex });
+        worksheet[cellAddress] = { t: 's', v: status };
+        statusesAdded++;
+      } else {
+        console.warn(`[Sales Export] Skipping row ${rowIndex}: no document number at expected column`);
+        statusesSkipped++;
+      }
     }
   }
 
