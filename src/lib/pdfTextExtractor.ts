@@ -501,7 +501,7 @@ export async function extractMultiplePdfInvoices(
       // Check if text is garbled (scanned PDF)
       if (isGarbledText(text)) {
         console.log(`[PDF Extract] Detected scanned PDF: ${file.name}, using OCR fallback`);
-        const ocrData = await extractScannedPdfWithOcr(file, i);
+        const ocrData = await extractScannedPdfWithOcr(file, i, firmVatId ?? null);
         results.push(ocrData);
       } else {
         // Native text is readable, use regex parsing
@@ -539,7 +539,8 @@ export async function extractMultiplePdfInvoices(
 export async function extractMultipleScannedPdfs(
   files: File[],
   startIndex: number = 0,
-  onProgress?: (completed: number, total: number, currentFileName?: string) => void
+  onProgress?: (completed: number, total: number, currentFileName?: string) => void,
+  firmVatId?: string | null
 ): Promise<ExtractedSalesPdfData[]> {
   const results: ExtractedSalesPdfData[] = [];
 
@@ -549,7 +550,7 @@ export async function extractMultipleScannedPdfs(
 
     try {
       console.log(`[PDF Extract] Processing scanned PDF via OCR: ${file.name}`);
-      const ocrData = await extractScannedPdfWithOcr(file, startIndex + i);
+      const ocrData = await extractScannedPdfWithOcr(file, startIndex + i, firmVatId ?? null);
       results.push(ocrData);
     } catch (error) {
       console.error(`Error extracting scanned PDF ${file.name}:`, error);

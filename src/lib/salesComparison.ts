@@ -298,6 +298,23 @@ export function runSalesVerification(
 
   console.log(`[Sales Verification] Total Excel rows: ${excelRows.length}, Verifiable: ${verifiableExcelRows.length}, Excluded (ПЗДДС etc.): ${excelRows.length - verifiableExcelRows.length}`);
 
+  // Safety net: If any PDF's clientId matches our firmVatId, swap clientId and sellerId.
+  // This catches cases where OCR or native extraction assigned our own ID as the client.
+  if (firmVatId) {
+    const normFirm = firmVatId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+    for (const pdf of extractedPdfs) {
+      if (pdf.clientId) {
+        const normClient = pdf.clientId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+        if (normClient === normFirm) {
+          console.log(`[Sales Verification] Swapping IDs for "${pdf.fileName}": clientId ${pdf.clientId} matches firmVatId`);
+          const oldSeller = pdf.sellerId;
+          pdf.sellerId = pdf.clientId;
+          pdf.clientId = oldSeller;
+        }
+      }
+    }
+  }
+
   // Pass 1: Exact document number matches only
   console.log(`[Sales Verification] Pass 1: Exact matches`);
   for (let i = 0; i < extractedPdfs.length; i++) {

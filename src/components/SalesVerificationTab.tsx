@@ -174,7 +174,8 @@ export function SalesVerificationTab() {
             if (fileName) {
               setCurrentFileName(fileName);
             }
-          }
+          },
+          effectiveFirmVatId
         );
         allExtractedPdfs = [...allExtractedPdfs, ...scannedExtracted];
       }

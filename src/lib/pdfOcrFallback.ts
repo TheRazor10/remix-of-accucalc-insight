@@ -110,7 +110,8 @@ async function pdfPageToImage(pdf: pdfjsLib.PDFDocumentProxy, pageNum: number): 
  */
 export async function extractScannedPdfWithOcr(
   file: File,
-  fileIndex: number
+  fileIndex: number,
+  firmVatId: string | null = null
 ): Promise<ExtractedSalesPdfData> {
   try {
     console.log(`[OCR Fallback] Processing scanned PDF: ${file.name}`);
@@ -124,6 +125,9 @@ export async function extractScannedPdfWithOcr(
 
     console.log(`[OCR Fallback] Sending to local Gemini server for OCR (${imageBase64.length} chars)...`);
 
+    // Build ownCompanyIds to help Gemini distinguish seller from client
+    const ownCompanyIds = firmVatId ? [firmVatId] : [];
+
     // Call the local Express/Gemini server
     const response = await fetch(`${STANDALONE_CONFIG.standaloneServerUrl}/extract-invoice`, {
       method: 'POST',
@@ -132,6 +136,7 @@ export async function extractScannedPdfWithOcr(
         imageBase64,
         mimeType,
         useProModel: false,
+        ownCompanyIds,
       }),
     });
 
@@ -151,8 +156,8 @@ export async function extractScannedPdfWithOcr(
       documentType: data.documentType || null,
       documentNumber: data.documentNumber || null,
       documentDate: data.documentDate || null,
-      sellerId: null,
-      clientId: data.supplierId || data.clientId || null,
+      sellerId: data.supplierId || null,
+      clientId: data.clientId || null,
       clientName: null,
       taxBaseAmount: data.taxBaseAmount ?? null,
       vatAmount: data.vatAmount ?? null,
