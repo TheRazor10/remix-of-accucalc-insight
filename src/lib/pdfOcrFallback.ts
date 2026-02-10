@@ -78,27 +78,26 @@ async function pdfPageToImage(pdf: pdfjsLib.PDFDocumentProxy, pageNum: number): 
   const context = canvas.getContext('2d')!;
 
   const maxDim = 2000;
-  let finalWidth = viewport.width;
-  let finalHeight = viewport.height;
-  if (finalWidth > maxDim || finalHeight > maxDim) {
-    const ratio = Math.min(maxDim / finalWidth, maxDim / finalHeight);
-    finalWidth = Math.floor(finalWidth * ratio);
-    finalHeight = Math.floor(finalHeight * ratio);
+  let renderViewport = viewport;
+  if (viewport.width > maxDim || viewport.height > maxDim) {
+    const ratio = Math.min(maxDim / viewport.width, maxDim / viewport.height);
+    const cappedScale = scale * ratio;
+    renderViewport = page.getViewport({ scale: cappedScale });
   }
 
-  canvas.width = finalWidth;
-  canvas.height = finalHeight;
+  canvas.width = Math.floor(renderViewport.width);
+  canvas.height = Math.floor(renderViewport.height);
 
-  // Render page to canvas
+  // Render page to canvas using the same viewport as the canvas dimensions
   await page.render({
     canvasContext: context,
-    viewport: viewport,
+    viewport: renderViewport,
   }).promise;
 
   // Convert to base64 PNG (more reliable than JPEG for OCR)
   const dataUrl = canvas.toDataURL('image/png');
 
-  console.log(`[OCR] Image dimensions: ${finalWidth}x${finalHeight}, base64 length: ${dataUrl.length}`);
+  console.log(`[OCR] Image dimensions: ${canvas.width}x${canvas.height}, base64 length: ${dataUrl.length}`);
 
   // Extract base64 part
   return { base64: dataUrl.split(',')[1], mimeType: 'image/png' };

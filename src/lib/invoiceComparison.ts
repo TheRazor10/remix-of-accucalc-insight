@@ -601,11 +601,11 @@ function supplierIdsMatch(invoiceId: string | null, excelId: string): boolean {
   const normalizedInvoice = invoiceId.replace(/\s/g, '').toUpperCase();
   const normalizedExcel = excelId.replace(/\s/g, '').toUpperCase();
   
-  return normalizedInvoice === normalizedExcel ||
-    normalizedInvoice === `BG${normalizedExcel}` ||
-    `BG${normalizedInvoice}` === normalizedExcel ||
-    normalizedInvoice.endsWith(normalizedExcel) ||
-    normalizedExcel.endsWith(normalizedInvoice);
+  // Strip BG prefix from both sides for comparison
+  const strippedInvoice = normalizedInvoice.replace(/^BG/, '');
+  const strippedExcel = normalizedExcel.replace(/^BG/, '');
+
+  return strippedInvoice === strippedExcel;
 }
 
 /**
