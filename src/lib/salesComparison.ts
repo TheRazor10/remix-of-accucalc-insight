@@ -458,13 +458,14 @@ export function runExcelToExcelComparison(
 
       const fields = buildExcelToExcelFields(mainRow, candidate);
       const hasMismatch = fields.some(f => f.status === 'mismatch');
+      const hasIndividual = fields.some(f => f.status === 'individual');
 
       comparisons.push({
         documentNumber: mainRow.documentNumber,
         mainExcelRow: mainRow.rowIndex,
         secondarySource: candidate.sourceFile,
         fieldComparisons: fields,
-        overallStatus: hasMismatch ? 'mismatch' : 'match',
+        overallStatus: hasMismatch ? 'mismatch' : hasIndividual ? 'individual' : 'match',
       });
 
       matchedMainRows.add(mainRow.rowIndex);
@@ -498,14 +499,16 @@ export function runExcelToExcelComparison(
 
   const matchedCount = comparisons.filter(c => c.overallStatus === 'match').length;
   const mismatchCount = comparisons.filter(c => c.overallStatus === 'mismatch').length;
+  const individualCount = comparisons.filter(c => c.overallStatus === 'individual').length;
 
-  console.log(`[Excel-to-Excel] Matched: ${matchedCount}, Mismatches: ${mismatchCount}, Only in main: ${onlyInMainRows.length}, Only in secondary: ${onlyInSecondaryRows.length}`);
+  console.log(`[Excel-to-Excel] Matched: ${matchedCount}, Mismatches: ${mismatchCount}, Individuals: ${individualCount}, Only in main: ${onlyInMainRows.length}, Only in secondary: ${onlyInSecondaryRows.length}`);
 
   return {
     totalMainRows: verifiableMain.length,
     totalSecondaryRows: issuedDocRows.length,
     matchedCount,
     mismatchCount,
+    individualCount,
     onlyInMainCount: onlyInMainRows.length,
     onlyInSecondaryCount: onlyInSecondaryRows.length,
     comparisons,
@@ -531,15 +534,22 @@ function buildExcelToExcelFields(
   });
 
   // Counterparty ID (counterpartyId vs bulstat)
+  // If either side is all-9s (physical individual placeholder), flag as 'individual' not 'mismatch'
+  const isIndividual = isPhysicalIndividualId(main.counterpartyId) || isPhysicalIndividualId(secondary.bulstat);
   const normMainId = main.counterpartyId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
   const normSecId = secondary.bulstat.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
   const idsMatch = normMainId === normSecId || !normMainId || !normSecId;
+  let idStatus: ExcelFieldComparison['status'];
+  if (!main.counterpartyId || !secondary.bulstat) idStatus = 'missing';
+  else if (idsMatch) idStatus = 'match';
+  else if (isIndividual) idStatus = 'individual';
+  else idStatus = 'mismatch';
   fields.push({
     fieldName: 'counterpartyId',
     fieldLabel: 'Булстат / ИН',
     mainValue: main.counterpartyId,
     secondaryValue: secondary.bulstat,
-    status: !main.counterpartyId || !secondary.bulstat ? 'missing' : idsMatch ? 'match' : 'mismatch',
+    status: idStatus,
   });
 
   // Tax Base

@@ -168,7 +168,7 @@ export interface ExcelFieldComparison {
   fieldLabel: string;
   mainValue: string | null;
   secondaryValue: string | null;
-  status: 'match' | 'mismatch' | 'missing';
+  status: 'match' | 'mismatch' | 'missing' | 'individual';
 }
 
 /**
@@ -179,7 +179,7 @@ export interface ExcelToExcelComparisonResult {
   mainExcelRow: number | null;
   secondarySource: string | null;
   fieldComparisons: ExcelFieldComparison[];
-  overallStatus: 'match' | 'mismatch' | 'only_in_main' | 'only_in_secondary';
+  overallStatus: 'match' | 'mismatch' | 'individual' | 'only_in_main' | 'only_in_secondary';
 }
 
 /**
@@ -190,6 +190,7 @@ export interface ExcelToExcelSummary {
   totalSecondaryRows: number;
   matchedCount: number;
   mismatchCount: number;
+  individualCount: number;
   onlyInMainCount: number;
   onlyInSecondaryCount: number;
   comparisons: ExcelToExcelComparisonResult[];
