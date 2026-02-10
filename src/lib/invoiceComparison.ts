@@ -107,7 +107,8 @@ const sanitizeDocumentNumber = (docNumber: string | null): string | null => {
 async function callStandaloneServer(
   base64: string,
   useProModel: boolean,
-  ownCompanyIds: string[]
+  ownCompanyIds: string[],
+  mimeType: string = 'image/jpeg'
 ): Promise<any> {
   const response = await fetch(`${STANDALONE_CONFIG.standaloneServerUrl}/extract-invoice`, {
     method: 'POST',
@@ -116,7 +117,7 @@ async function callStandaloneServer(
     },
     body: JSON.stringify({
       imageBase64: base64,
-      mimeType: 'image/jpeg',
+      mimeType,
       useProModel,
       ownCompanyIds: ownCompanyIds.length > 0 ? ownCompanyIds : undefined,
     }),
@@ -151,7 +152,7 @@ async function extractInvoiceDataInternal(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     );
 
-    const data = await callStandaloneServer(base64, useProModel, ownCompanyIds);
+    const data = await callStandaloneServer(base64, useProModel, ownCompanyIds, uploadedFile.imageBlob.type || 'image/jpeg');
 
     const taxBaseAmount = parseAmountValue(data.taxBaseAmount);
     const vatAmount = parseAmountValue(data.vatAmount);
@@ -405,7 +406,7 @@ async function extractLastPageData(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     );
 
-    const data = await callStandaloneServer(base64, false, []);
+    const data = await callStandaloneServer(base64, false, [], lastPageBlob.type || 'image/jpeg');
 
     return {
       imageIndex: fileIndex,
