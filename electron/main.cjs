@@ -50,9 +50,10 @@ Extract the following fields:
    - The document type is the category of the document, not its copy status
 2. Document Number (Номер на документа) - the invoice number, usually after "ФАКТУРА №" or "ФАКТУРА N:" or "№"
 3. Document Date (Дата на документа) - the issue date, usually labeled "Дата:" or "Дата на издаване:" or "Дата дан.събитие:"
-4. Supplier ID (ДДС номер или ЕИК на доставчика) - the VAT number (starts with BG) or company ID (9 digits) of the SUPPLIER (Доставчик)
-5. Tax Base Amount (Данъчна основа) - the TOTAL taxable base for the ENTIRE invoice, NOT page subtotals
-6. VAT Amount (ДДС) - the TOTAL VAT amount for the ENTIRE invoice, usually 20% of tax base
+4. Supplier ID (ДДС номер или ЕИК на доставчика) - the VAT number (starts with BG) or company ID (9 digits) of the SUPPLIER/SELLER (Доставчик/Продавач/Издател)
+5. Client ID (ДДС номер или ЕИК на получателя) - the VAT number (starts with BG) or company ID (9 digits) of the CLIENT/BUYER (Получател/Клиент)
+6. Tax Base Amount (Данъчна основа) - the TOTAL taxable base for the ENTIRE invoice, NOT page subtotals
+7. VAT Amount (ДДС) - the TOTAL VAT amount for the ENTIRE invoice, usually 20% of tax base
 
 CRITICAL - CURRENCY PRIORITY (EUR vs BGN):
 Many Bulgarian invoices show amounts in BOTH EUR and BGN (лева). You MUST:
@@ -82,7 +83,8 @@ Important notes:
 - For amounts, extract only the numeric value (can be negative for credit notes)
 - Preserve negative signs for credit notes (КРЕДИТНО ИЗВЕСТИЕ)
 - The Supplier ID is from the seller/issuer (Доставчик), NOT the buyer (Получател)
-- Look for ДДС № or ЕИК near the supplier company name at the top of the invoice
+- The Client ID is from the buyer/receiver (Получател/Клиент), NOT the seller (Доставчик)
+- Look for ДДС № or ЕИК near each company's name section on the invoice
 - If a field cannot be read clearly, return null for that field
 
 Return a confidence level:
@@ -97,6 +99,7 @@ IMPORTANT: Return your response as valid JSON with these exact fields:
   "documentNumber": string or null,
   "documentDate": string or null,
   "supplierId": string or null,
+  "clientId": string or null,
   "taxBaseAmount": number or null,
   "vatAmount": number or null,
   "confidence": "high" | "medium" | "low" | "unreadable"
@@ -128,11 +131,11 @@ function startServer(apiKey) {
 
         let companyIdExclusionNote = '';
         if (ownCompanyIdsList.length > 0) {
-          companyIdExclusionNote = `\n\nCRITICAL - EXCLUDE OWN COMPANY IDs:
-The following IDs belong to the document OWNER (buyer/receiver), NOT the supplier:
+          companyIdExclusionNote = `\n\nCRITICAL - OWN COMPANY IDs:
+The following IDs belong to the invoice ISSUER/SELLER (Доставчик):
 ${ownCompanyIdsList.map(id => `- ${id}`).join('\n')}
-You MUST extract the COUNTERPARTY's ID (the other company on the invoice), NOT any of the above IDs.
-If you see one of these IDs, it is the buyer - look for the OTHER company's ID.`;
+Assign these IDs to "supplierId". The OTHER company's ID on the invoice is the "clientId" (Получател/Клиент).
+Make sure to extract BOTH supplierId and clientId as separate fields.`;
         }
 
         const fullPrompt = SYSTEM_PROMPT + companyIdExclusionNote + '\n\nPlease extract the invoice data from this image and return it as JSON.';
@@ -162,7 +165,7 @@ If you see one of these IDs, it is the buyer - look for the OTHER company's ID.`
           console.error('Failed to parse Gemini response:', text);
           extractedData = {
             documentType: null, documentNumber: null, documentDate: null,
-            supplierId: null, taxBaseAmount: null, vatAmount: null,
+            supplierId: null, clientId: null, taxBaseAmount: null, vatAmount: null,
             confidence: 'unreadable',
           };
         }
@@ -174,7 +177,7 @@ If you see one of these IDs, it is the buyer - look for the OTHER company's ID.`
         res.status(500).json({
           error: error.message || 'Unknown error',
           documentType: null, documentNumber: null, documentDate: null,
-          supplierId: null, taxBaseAmount: null, vatAmount: null,
+          supplierId: null, clientId: null, taxBaseAmount: null, vatAmount: null,
           confidence: 'unreadable',
         });
       }
