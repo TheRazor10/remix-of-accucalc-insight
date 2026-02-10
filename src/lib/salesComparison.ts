@@ -535,9 +535,14 @@ function buildExcelToExcelFields(
 
   // Counterparty ID (counterpartyId vs bulstat)
   // If either side is all-9s (physical individual placeholder), flag as 'individual' not 'mismatch'
+  // Справка IDs can be 13 digits where last 4 are "office" code - trim to first 9 for comparison
   const isIndividual = isPhysicalIndividualId(main.counterpartyId) || isPhysicalIndividualId(secondary.bulstat);
   const normMainId = main.counterpartyId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
-  const normSecId = secondary.bulstat.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+  let normSecId = secondary.bulstat.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+  // If secondary ID is 13 digits, trim to first 9 (remove office suffix)
+  if (/^\d{13}$/.test(normSecId)) {
+    normSecId = normSecId.substring(0, 9);
+  }
   const idsMatch = normMainId === normSecId || !normMainId || !normSecId;
   let idStatus: ExcelFieldComparison['status'];
   if (!main.counterpartyId || !secondary.bulstat) idStatus = 'missing';
@@ -562,8 +567,8 @@ function buildExcelToExcelFields(
     status: main.totalTaxBase === null || secondary.taxBase === null ? 'missing' : taxBaseMatch ? 'match' : 'mismatch',
   });
 
-  // VAT
-  const vatMatch = excelAmountsMatch(main.totalVat, secondary.vat);
+  // VAT (exact match, no tolerance)
+  const vatMatch = excelAmountsMatchExact(main.totalVat, secondary.vat);
   fields.push({
     fieldName: 'vat',
     fieldLabel: 'ДДС',
@@ -578,4 +583,9 @@ function buildExcelToExcelFields(
 function excelAmountsMatch(a: number | null, b: number | null): boolean {
   if (a === null || b === null) return false;
   return Math.abs(Math.round(a * 100) - Math.round(b * 100)) <= 2; // 0.02 tolerance
+}
+
+function excelAmountsMatchExact(a: number | null, b: number | null): boolean {
+  if (a === null || b === null) return false;
+  return Math.round(a * 100) === Math.round(b * 100);
 }

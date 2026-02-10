@@ -10,7 +10,7 @@ import { runSalesVerification, runExcelToExcelComparison } from '@/lib/salesComp
 import { SalesExcelRow, SalesVerificationSummary, SalesJournalParseResult, ExtractedSalesPdfData, ExcelToExcelSummary } from '@/lib/salesComparisonTypes';
 import { parseMultipleIssuedDocs } from '@/lib/issuedDocsParser';
 import { SalesComparisonResults } from '@/components/SalesComparisonResults';
-import { exportSalesVerificationResults } from '@/lib/salesVerificationExport';
+import { exportSalesVerificationResults, exportExcelToExcelResults } from '@/lib/salesVerificationExport';
 import { toast } from '@/hooks/use-toast';
 import {
   AlertDialog,
@@ -821,8 +821,20 @@ function ExcelToExcelResults({ summary }: { summary: ExcelToExcelSummary }) {
     );
   };
 
+  const handleExport = () => {
+    exportExcelToExcelResults(summary);
+  };
+
   return (
     <div className="space-y-4 mt-4">
+      {/* Export button */}
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" onClick={handleExport} className="gap-2">
+          <Download className="h-4 w-4" />
+          Експорт
+        </Button>
+      </div>
+
       {/* Summary stats */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 text-center">

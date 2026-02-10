@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { SalesVerificationSummary, isPhysicalIndividualId } from './salesComparisonTypes';
+import { SalesVerificationSummary, ExcelToExcelSummary, isPhysicalIndividualId } from './salesComparisonTypes';
 
 /**
  * Status labels for the sales export
@@ -182,6 +182,116 @@ export async function exportSalesVerificationResults(
   const link = document.createElement('a');
   link.href = url;
   link.download = outputFilename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+// ─── Excel-to-Excel Export ──────────────────────────────────────────────────
+
+const EXCEL_COMPARISON_STATUS_LABELS: Record<string, string> = {
+  match: 'Съвпадение',
+  mismatch: 'Разлика',
+  individual: 'Физ. лице',
+  only_in_main: 'Само в дневник',
+  only_in_secondary: 'Само в справка',
+};
+
+/**
+ * Export Excel-to-Excel comparison results as a new Excel file.
+ */
+export function exportExcelToExcelResults(summary: ExcelToExcelSummary): void {
+  const rows: (string | number | null)[][] = [];
+
+  // Header row
+  rows.push([
+    'Номер документ',
+    'Статус',
+    'Ред в дневник',
+    'Файл справка',
+    'Дата (Дневник)',
+    'Дата (Справка)',
+    'Булстат (Дневник)',
+    'Булстат (Справка)',
+    'Дан. основа (Дневник)',
+    'Дан. основа (Справка)',
+    'ДДС (Дневник)',
+    'ДДС (Справка)',
+  ]);
+
+  // Sort: mismatches first, then individuals, then only_in_main, only_in_secondary, then matches
+  const order: Record<string, number> = { mismatch: 0, individual: 1, only_in_main: 2, only_in_secondary: 3, match: 4 };
+  const sorted = [...summary.comparisons].sort(
+    (a, b) => (order[a.overallStatus] ?? 5) - (order[b.overallStatus] ?? 5)
+  );
+
+  for (const item of sorted) {
+    const dateField = item.fieldComparisons.find(f => f.fieldName === 'date');
+    const idField = item.fieldComparisons.find(f => f.fieldName === 'counterpartyId');
+    const taxBaseField = item.fieldComparisons.find(f => f.fieldName === 'taxBase');
+    const vatField = item.fieldComparisons.find(f => f.fieldName === 'vat');
+
+    rows.push([
+      item.documentNumber,
+      EXCEL_COMPARISON_STATUS_LABELS[item.overallStatus] || item.overallStatus,
+      item.mainExcelRow,
+      item.secondarySource,
+      dateField?.mainValue ?? null,
+      dateField?.secondaryValue ?? null,
+      idField?.mainValue ?? null,
+      idField?.secondaryValue ?? null,
+      taxBaseField?.mainValue ?? null,
+      taxBaseField?.secondaryValue ?? null,
+      vatField?.mainValue ?? null,
+      vatField?.secondaryValue ?? null,
+    ]);
+  }
+
+  // Create workbook
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+
+  // Set column widths
+  ws['!cols'] = [
+    { wch: 18 }, // Doc number
+    { wch: 16 }, // Status
+    { wch: 12 }, // Row
+    { wch: 25 }, // File
+    { wch: 12 }, { wch: 12 }, // Dates
+    { wch: 16 }, { wch: 16 }, // IDs
+    { wch: 14 }, { wch: 14 }, // Tax base
+    { wch: 12 }, { wch: 12 }, // VAT
+  ];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Сравнение');
+
+  // Summary sheet
+  const summaryRows = [
+    ['Резултат', 'Брой'],
+    ['Съвпадения', summary.matchedCount],
+    ['Разлики', summary.mismatchCount],
+    ['Физ. лица', summary.individualCount],
+    ['Само в дневник', summary.onlyInMainCount],
+    ['Само в справка', summary.onlyInSecondaryCount],
+    ['', ''],
+    ['Общо дневник', summary.totalMainRows],
+    ['Общо справка', summary.totalSecondaryRows],
+  ];
+  const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
+  summaryWs['!cols'] = [{ wch: 18 }, { wch: 10 }];
+  XLSX.utils.book_append_sheet(wb, summaryWs, 'Обобщение');
+
+  // Download
+  const outputBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  const timestamp = new Date().toISOString().slice(0, 10);
+  const filename = `сравнение_дневник_справка_${timestamp}.xlsx`;
+
+  const blob = new Blob([outputBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
