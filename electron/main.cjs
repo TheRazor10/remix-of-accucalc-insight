@@ -216,7 +216,7 @@ function createWindow(port) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      backgroundThrottling: true,
+      backgroundThrottling: false,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
