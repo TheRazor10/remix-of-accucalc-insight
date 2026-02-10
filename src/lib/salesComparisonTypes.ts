@@ -142,6 +142,61 @@ export function isVerifiableDocumentType(docType: string): boolean {
  * Check if a client ID represents a physical individual (placeholder ID).
  * Physical individuals use placeholder IDs like 999999999999999 since they don't have VAT/EIK.
  */
+// ─── Excel-to-Excel (Справка издадени документи) Types ─────────────────────
+
+/**
+ * Row from "Справка издадени документи" Excel file.
+ */
+export interface IssuedDocRow {
+  rowIndex: number;
+  sourceFile: string;
+  documentNumber: string;
+  documentType: string;
+  documentDate: string;
+  partnerName: string;
+  bulstat: string;
+  taxBase: number | null;
+  vat: number | null;
+  totalAmount: number | null;
+}
+
+/**
+ * Field comparison for Excel-to-Excel.
+ */
+export interface ExcelFieldComparison {
+  fieldName: string;
+  fieldLabel: string;
+  mainValue: string | null;
+  secondaryValue: string | null;
+  status: 'match' | 'mismatch' | 'missing';
+}
+
+/**
+ * Result of comparing a single row between main and secondary Excel.
+ */
+export interface ExcelToExcelComparisonResult {
+  documentNumber: string;
+  mainExcelRow: number | null;
+  secondarySource: string | null;
+  fieldComparisons: ExcelFieldComparison[];
+  overallStatus: 'match' | 'mismatch' | 'only_in_main' | 'only_in_secondary';
+}
+
+/**
+ * Summary of Excel-to-Excel comparison.
+ */
+export interface ExcelToExcelSummary {
+  totalMainRows: number;
+  totalSecondaryRows: number;
+  matchedCount: number;
+  mismatchCount: number;
+  onlyInMainCount: number;
+  onlyInSecondaryCount: number;
+  comparisons: ExcelToExcelComparisonResult[];
+  onlyInMainRows: SalesExcelRow[];
+  onlyInSecondaryRows: IssuedDocRow[];
+}
+
 export function isPhysicalIndividualId(clientId: string | null): boolean {
   if (!clientId) return false;
   const normalized = clientId.replace(/\s/g, '');

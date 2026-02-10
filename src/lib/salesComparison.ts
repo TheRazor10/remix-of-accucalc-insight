@@ -7,8 +7,12 @@ import {
   SALES_DOCUMENT_TYPE_MAPPING,
   isVerifiableDocumentType,
   isPhysicalIndividualId,
+  IssuedDocRow,
+  ExcelFieldComparison,
+  ExcelToExcelComparisonResult,
+  ExcelToExcelSummary,
 } from './salesComparisonTypes';
-import { normalizeSalesDocumentNumber, salesDatesMatch, runExcelInternalChecks } from './salesJournalParser';
+import { normalizeSalesDocumentNumber, normalizeSalesDate, salesDatesMatch, runExcelInternalChecks } from './salesJournalParser';
 
 /**
  * Build a comparison result for a matched PDF-Excel pair.
@@ -412,4 +416,156 @@ export function runSalesVerification(
     excelCheckErrors,
     excelCheckWarnings,
   };
+}
+
+// ─── Excel-to-Excel Comparison (Справка издадени документи) ─────────────────
+
+/**
+ * Compare the main sales journal rows with rows from "Справка издадени документи" files.
+ * Matches by document number, then compares date, counterparty ID, tax base, and VAT.
+ */
+export function runExcelToExcelComparison(
+  mainRows: SalesExcelRow[],
+  issuedDocRows: IssuedDocRow[]
+): ExcelToExcelSummary {
+  const comparisons: ExcelToExcelComparisonResult[] = [];
+  const matchedMainRows = new Set<number>();
+  const matchedSecondaryRows = new Set<number>();
+
+  // Only compare verifiable document types from main
+  const verifiableMain = mainRows.filter(row => isVerifiableDocumentType(row.documentType));
+
+  // Index secondary rows by normalized document number for fast lookup
+  const secondaryByDocNum = new Map<string, IssuedDocRow[]>();
+  for (const row of issuedDocRows) {
+    const normNum = normalizeSalesDocumentNumber(row.documentNumber);
+    if (!normNum) continue;
+    if (!secondaryByDocNum.has(normNum)) {
+      secondaryByDocNum.set(normNum, []);
+    }
+    secondaryByDocNum.get(normNum)!.push(row);
+  }
+
+  // Match main rows to secondary
+  for (const mainRow of verifiableMain) {
+    const normMainNum = normalizeSalesDocumentNumber(mainRow.documentNumber);
+    if (!normMainNum) continue;
+
+    const candidates = secondaryByDocNum.get(normMainNum);
+    if (candidates && candidates.length > 0) {
+      // Pick the first unmatched candidate
+      const candidate = candidates.find(c => !matchedSecondaryRows.has(c.rowIndex)) || candidates[0];
+
+      const fields = buildExcelToExcelFields(mainRow, candidate);
+      const hasMismatch = fields.some(f => f.status === 'mismatch');
+
+      comparisons.push({
+        documentNumber: mainRow.documentNumber,
+        mainExcelRow: mainRow.rowIndex,
+        secondarySource: candidate.sourceFile,
+        fieldComparisons: fields,
+        overallStatus: hasMismatch ? 'mismatch' : 'match',
+      });
+
+      matchedMainRows.add(mainRow.rowIndex);
+      matchedSecondaryRows.add(candidate.rowIndex);
+    }
+  }
+
+  // Main rows with no match in secondary
+  const onlyInMainRows = verifiableMain.filter(r => !matchedMainRows.has(r.rowIndex));
+  for (const row of onlyInMainRows) {
+    comparisons.push({
+      documentNumber: row.documentNumber,
+      mainExcelRow: row.rowIndex,
+      secondarySource: null,
+      fieldComparisons: [],
+      overallStatus: 'only_in_main',
+    });
+  }
+
+  // Secondary rows with no match in main
+  const onlyInSecondaryRows = issuedDocRows.filter(r => !matchedSecondaryRows.has(r.rowIndex));
+  for (const row of onlyInSecondaryRows) {
+    comparisons.push({
+      documentNumber: row.documentNumber,
+      mainExcelRow: null,
+      secondarySource: row.sourceFile,
+      fieldComparisons: [],
+      overallStatus: 'only_in_secondary',
+    });
+  }
+
+  const matchedCount = comparisons.filter(c => c.overallStatus === 'match').length;
+  const mismatchCount = comparisons.filter(c => c.overallStatus === 'mismatch').length;
+
+  console.log(`[Excel-to-Excel] Matched: ${matchedCount}, Mismatches: ${mismatchCount}, Only in main: ${onlyInMainRows.length}, Only in secondary: ${onlyInSecondaryRows.length}`);
+
+  return {
+    totalMainRows: verifiableMain.length,
+    totalSecondaryRows: issuedDocRows.length,
+    matchedCount,
+    mismatchCount,
+    onlyInMainCount: onlyInMainRows.length,
+    onlyInSecondaryCount: onlyInSecondaryRows.length,
+    comparisons,
+    onlyInMainRows,
+    onlyInSecondaryRows,
+  };
+}
+
+function buildExcelToExcelFields(
+  main: SalesExcelRow,
+  secondary: IssuedDocRow
+): ExcelFieldComparison[] {
+  const fields: ExcelFieldComparison[] = [];
+
+  // Date
+  const datesMatch = salesDatesMatch(main.documentDate, secondary.documentDate);
+  fields.push({
+    fieldName: 'date',
+    fieldLabel: 'Дата',
+    mainValue: main.documentDate,
+    secondaryValue: secondary.documentDate,
+    status: !main.documentDate || !secondary.documentDate ? 'missing' : datesMatch ? 'match' : 'mismatch',
+  });
+
+  // Counterparty ID (counterpartyId vs bulstat)
+  const normMainId = main.counterpartyId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+  const normSecId = secondary.bulstat.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+  const idsMatch = normMainId === normSecId || !normMainId || !normSecId;
+  fields.push({
+    fieldName: 'counterpartyId',
+    fieldLabel: 'Булстат / ИН',
+    mainValue: main.counterpartyId,
+    secondaryValue: secondary.bulstat,
+    status: !main.counterpartyId || !secondary.bulstat ? 'missing' : idsMatch ? 'match' : 'mismatch',
+  });
+
+  // Tax Base
+  const taxBaseMatch = excelAmountsMatch(main.totalTaxBase, secondary.taxBase);
+  fields.push({
+    fieldName: 'taxBase',
+    fieldLabel: 'Данъчна основа',
+    mainValue: main.totalTaxBase?.toFixed(2) ?? null,
+    secondaryValue: secondary.taxBase?.toFixed(2) ?? null,
+    status: main.totalTaxBase === null || secondary.taxBase === null ? 'missing' : taxBaseMatch ? 'match' : 'mismatch',
+  });
+
+  // VAT
+  const vatMatch = excelAmountsMatch(main.totalVat, secondary.vat);
+  fields.push({
+    fieldName: 'vat',
+    fieldLabel: 'ДДС',
+    mainValue: main.totalVat?.toFixed(2) ?? null,
+    secondaryValue: secondary.vat?.toFixed(2) ?? null,
+    status: main.totalVat === null || secondary.vat === null ? 'missing' : vatMatch ? 'match' : 'mismatch',
+  });
+
+  return fields;
+}
+
+function excelAmountsMatch(a: number | null, b: number | null): boolean {
+  if (a === null || b === null) return false;
+  return Math.abs(Math.round(a * 100) - Math.round(b * 100)) <= 2; // 0.02 tolerance
 }
