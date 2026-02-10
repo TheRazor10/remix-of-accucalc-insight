@@ -3,8 +3,13 @@ import { IssuedDocRow } from './salesComparisonTypes';
 
 /**
  * Parse a "Справка издадени документи" Excel file.
- * Columns: №, Тип документ, Дата, Дни на падеж, Дата на падеж,
- *          Партньор, Булстат, Данъчна основа, ДДС, Сума за плащане, Тип плащане
+ * Supports multiple column layouts from different accounting software:
+ *
+ * Format 1: №, Тип документ, Дата, Дни на падеж, Дата на падеж,
+ *           Партньор, Булстат, Данъчна основа, ДДС, Сума за плащане, Тип плащане
+ *
+ * Format 2: Документ, Н-р на документ, Дата на документ, Дата на дан. съб.,
+ *           Партньор, ЕИК, Н-р ДДС, Начин на плащане, Дан. основа, ДДС, Общо, Валута, Към документ
  */
 export async function parseIssuedDocsExcel(file: File): Promise<IssuedDocRow[]> {
   const arrayBuffer = await file.arrayBuffer();
@@ -23,7 +28,7 @@ export async function parseIssuedDocsExcel(file: File): Promise<IssuedDocRow[]> 
     throw new Error('Файлът не съдържа достатъчно данни');
   }
 
-  // Find the header row by looking for column names
+  // Find the header row and build column map
   let headerRowIndex = -1;
   let colMap: Record<string, number> = {};
 
@@ -31,41 +36,73 @@ export async function parseIssuedDocsExcel(file: File): Promise<IssuedDocRow[]> 
     const row = data[i];
     if (!row || !Array.isArray(row)) continue;
 
-    const rowStr = row.map(c => String(c ?? '').trim().toLowerCase()).join('|');
+    const cells = row.map(c => String(c ?? '').trim().toLowerCase());
+    const rowStr = cells.join('|');
 
-    // Look for the characteristic column headers
-    if (rowStr.includes('тип документ') || rowStr.includes('булстат') || rowStr.includes('данъчна основа')) {
-      headerRowIndex = i;
+    // Detect header row by looking for characteristic column names
+    const isHeaderRow =
+      rowStr.includes('тип документ') || rowStr.includes('булстат') ||
+      rowStr.includes('данъчна основа') || rowStr.includes('дан. основа') ||
+      (rowStr.includes('н-р на документ') && rowStr.includes('еик'));
 
-      // Build column map by matching header names
-      for (let j = 0; j < row.length; j++) {
-        const cellVal = String(row[j] ?? '').trim().toLowerCase();
-        if (cellVal === '№' || cellVal === 'no' || cellVal === 'номер') colMap['number'] = j;
-        else if (cellVal.includes('тип документ') || cellVal === 'тип') colMap['type'] = j;
-        else if (cellVal === 'дата' && !cellVal.includes('падеж')) colMap['date'] = j;
-        else if (cellVal.includes('партн')) colMap['partner'] = j;
-        else if (cellVal.includes('булстат') || cellVal.includes('еик')) colMap['bulstat'] = j;
-        else if (cellVal.includes('данъчна основа')) colMap['taxBase'] = j;
-        else if (cellVal === 'ддс' || cellVal === 'vat') colMap['vat'] = j;
-        else if (cellVal.includes('сума за плащане') || cellVal.includes('сума')) colMap['total'] = j;
+    if (!isHeaderRow) continue;
+
+    headerRowIndex = i;
+
+    // Match each cell to a known column
+    for (let j = 0; j < cells.length; j++) {
+      const c = cells[j];
+
+      // Document number
+      if (c === '№' || c === 'no' || c === 'номер' || c === 'н-р на документ' || c.includes('н-р на документ')) {
+        colMap['number'] = j;
       }
-      break;
+      // Document type
+      else if (c.includes('тип документ') || c === 'тип' || c === 'документ') {
+        // "Документ" in Format 2 is the type column (not to be confused with doc number)
+        // Only assign if we haven't already found the number column at this index
+        if (!('type' in colMap)) colMap['type'] = j;
+      }
+      // Document date (exclude "дата на дан. съб." and "дата на падеж")
+      else if ((c === 'дата' || c === 'дата на документ') && !c.includes('дан.') && !c.includes('падеж') && !c.includes('съб')) {
+        colMap['date'] = j;
+      }
+      // Partner name
+      else if (c.includes('партн')) {
+        colMap['partner'] = j;
+      }
+      // Company ID: Булстат or ЕИК
+      else if (c.includes('булстат') || c === 'еик') {
+        colMap['bulstat'] = j;
+      }
+      // VAT number (Н-р ДДС) - use as fallback for bulstat if ЕИК is empty
+      else if (c.includes('н-р ддс') || c === 'ддс №' || c === 'ддс номер') {
+        colMap['vatNumber'] = j;
+      }
+      // Tax base: "Данъчна основа" or "Дан. основа"
+      else if (c.includes('данъчна основа') || c.includes('дан. основа') || c === 'дан.основа') {
+        colMap['taxBase'] = j;
+      }
+      // VAT amount (must be exact or close to avoid matching VAT number column)
+      else if ((c === 'ддс' || c === 'vat') && !c.includes('н-р') && !c.includes('номер') && !c.includes('№')) {
+        colMap['vat'] = j;
+      }
+      // Total: "Сума за плащане" or "Общо"
+      else if (c.includes('сума за плащане') || c.includes('сума') || c === 'общо') {
+        colMap['total'] = j;
+      }
     }
+
+    console.log(`[Issued Docs Parser] Detected header at row ${i + 1}, columns:`, colMap);
+    break;
   }
 
-  // Fallback: assume standard column order if header detection failed
+  // Fallback: assume Format 1 standard column order
   if (headerRowIndex === -1) {
     headerRowIndex = 0;
     colMap = {
-      number: 0,
-      type: 1,
-      date: 2,
-      // 3 = Дни на падеж, 4 = Дата на падеж (skip)
-      partner: 5,
-      bulstat: 6,
-      taxBase: 7,
-      vat: 8,
-      total: 9,
+      number: 0, type: 1, date: 2,
+      partner: 5, bulstat: 6, taxBase: 7, vat: 8, total: 9,
     };
   }
 
@@ -86,7 +123,9 @@ export async function parseIssuedDocsExcel(file: File): Promise<IssuedDocRow[]> 
     const documentType = cleanString(row[colMap['type']]);
     const documentDate = formatDateValue(row[colMap['date']]);
     const partnerName = cleanString(row[colMap['partner']]);
-    const bulstat = cleanString(row[colMap['bulstat']]);
+    // Use ЕИК/Булстат first, fall back to Н-р ДДС if empty
+    const bulstat = cleanString(row[colMap['bulstat']]) ||
+                    ('vatNumber' in colMap ? cleanString(row[colMap['vatNumber']]) : '');
     const taxBase = parseAmount(row[colMap['taxBase']]);
     const vat = parseAmount(row[colMap['vat']]);
     const totalAmount = parseAmount(row[colMap['total']]);
