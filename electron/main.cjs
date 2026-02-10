@@ -216,11 +216,25 @@ function createWindow(port) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      backgroundThrottling: false,
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
   mainWindow.loadURL(`http://localhost:${port}`);
+
+  // Throttle rendering when minimized to reduce CPU usage
+  mainWindow.on('minimize', () => {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.setFrameRate(1);
+    }
+  });
+
+  mainWindow.on('restore', () => {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.setFrameRate(60);
+    }
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
