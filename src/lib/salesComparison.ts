@@ -116,7 +116,7 @@ function buildComparisonResult(
  * With 6 total fields, allowing at most 3 mismatches prevents
  * completely unrelated rows from being matched.
  */
-const MAX_BEST_MATCH_MISMATCHES = 3;
+const MAX_BEST_MATCH_MISMATCHES = 4;
 
 /**
  * Find best matching Excel row for a PDF.
@@ -416,6 +416,158 @@ export function runSalesVerification(
     excelCheckErrors,
     excelCheckWarnings,
   };
+}
+
+// ─── Pro Re-extraction for Suspicious/Unreadable Sales Invoices ──────────────
+
+const DELAY_BETWEEN_PRO_REQUESTS_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Count non-null fields in extracted sales data (for comparison).
+ */
+function countExtractedSalesFields(data: ExtractedSalesPdfData): number {
+  let count = 0;
+  if (data.documentType) count++;
+  if (data.documentNumber) count++;
+  if (data.documentDate) count++;
+  if (data.clientId) count++;
+  if (data.taxBaseAmount !== null) count++;
+  if (data.vatAmount !== null) count++;
+  return count;
+}
+
+/**
+ * Get confidence-like score for sales extraction.
+ * Since sales extractions don't have a confidence field, we infer from field count.
+ */
+function getSalesExtractionScore(data: ExtractedSalesPdfData): number {
+  return countExtractedSalesFields(data);
+}
+
+/**
+ * Select the better extraction result by comparing against the matched Excel row.
+ * If an Excel row is available, picks whichever extraction has fewer mismatches.
+ * Falls back to field count when no Excel row is available.
+ */
+export function selectBetterSalesExtraction(
+  original: ExtractedSalesPdfData,
+  retried: ExtractedSalesPdfData,
+  matchedExcelRow?: SalesExcelRow | null
+): ExtractedSalesPdfData {
+  if (matchedExcelRow) {
+    const originalMismatches = countSalesMismatches(original, matchedExcelRow);
+    const retriedMismatches = countSalesMismatches(retried, matchedExcelRow);
+
+    console.log(`[SalesProRetry] Comparing against Excel row ${matchedExcelRow.rowIndex}: original=${originalMismatches} mismatches, pro=${retriedMismatches} mismatches`);
+
+    if (retriedMismatches < originalMismatches) {
+      console.log(`[SalesProRetry] Pro has fewer mismatches, using Pro`);
+      return { ...retried, wasDoubleChecked: true };
+    }
+    if (originalMismatches < retriedMismatches) {
+      console.log(`[SalesProRetry] Original has fewer mismatches, keeping original`);
+      return { ...original, wasDoubleChecked: true };
+    }
+    console.log(`[SalesProRetry] Same mismatch count, falling through to field comparison`);
+  }
+
+  const originalFields = getSalesExtractionScore(original);
+  const retriedFields = getSalesExtractionScore(retried);
+
+  if (retriedFields > originalFields) {
+    console.log(`[SalesProRetry] Pro result has more fields (${retriedFields} > ${originalFields})`);
+    return { ...retried, wasDoubleChecked: true };
+  }
+
+  console.log(`[SalesProRetry] Keeping original (fields: ${originalFields} vs ${retriedFields})`);
+  return { ...original, wasDoubleChecked: true };
+}
+
+/**
+ * Re-extract suspicious and not-found sales invoices using Pro model.
+ * Only re-extracts OCR-extracted invoices (scanned PDFs).
+ * Compares Pro result against the matched Excel row to ensure Pro doesn't make things worse.
+ */
+export async function reExtractSuspiciousSalesInvoices(
+  indices: number[],
+  scannedFiles: File[],
+  nativePdfCount: number,
+  currentExtractions: ExtractedSalesPdfData[],
+  firstPassComparisons: SalesComparisonResult[],
+  excelRows: SalesExcelRow[],
+  firmVatId: string | null = null,
+  onProgress?: (completed: number, total: number, currentFileName?: string) => void
+): Promise<ExtractedSalesPdfData[]> {
+  const results = [...currentExtractions];
+
+  // Only retry OCR-extracted invoices that haven't used Pro yet
+  const indicesToRetry = indices.filter(idx => {
+    const extraction = currentExtractions[idx];
+    if (extraction.usedProModel) {
+      console.log(`[SalesProRetry] Skipping ${extraction.fileName} - already used Pro model`);
+      return false;
+    }
+    if (extraction.extractionMethod !== 'ocr') {
+      console.log(`[SalesProRetry] Skipping ${extraction.fileName} - native extraction`);
+      return false;
+    }
+    return true;
+  });
+
+  console.log(`[SalesProRetry] Will retry ${indicesToRetry.length} of ${indices.length} invoices with Pro model`);
+
+  // Build lookup for Excel rows
+  const excelRowsByIndex = new Map(excelRows.map(r => [r.rowIndex, r]));
+
+  // Import the OCR function dynamically to avoid circular deps
+  const { extractScannedPdfWithOcr } = await import('./pdfOcrFallback');
+
+  for (let i = 0; i < indicesToRetry.length; i++) {
+    const idx = indicesToRetry[i];
+    const originalExtraction = currentExtractions[idx];
+
+    // Find the corresponding scanned file
+    const scannedFileIndex = idx - nativePdfCount;
+    if (scannedFileIndex < 0 || scannedFileIndex >= scannedFiles.length) {
+      console.log(`[SalesProRetry] Skipping index ${idx} - no matching scanned file`);
+      continue;
+    }
+    const file = scannedFiles[scannedFileIndex];
+
+    onProgress?.(i, indicesToRetry.length, file.name);
+
+    try {
+      console.log(`[SalesProRetry] Re-extracting ${file.name} with Pro model...`);
+
+      const proResult = await extractScannedPdfWithOcr(file, idx, firmVatId, true);
+
+      // Find the Excel row this was matched to in the first pass
+      const comparison = firstPassComparisons[idx];
+      const matchedExcelRow = comparison?.matchedExcelRow !== null && comparison?.matchedExcelRow !== undefined
+        ? excelRowsByIndex.get(comparison.matchedExcelRow) ?? null
+        : null;
+
+      const betterResult = selectBetterSalesExtraction(originalExtraction, proResult, matchedExcelRow);
+      results[idx] = betterResult;
+
+      console.log(`[SalesProRetry] Result for ${file.name}: kept ${betterResult.usedProModel ? 'Pro' : 'original'}`);
+    } catch (error) {
+      console.error(`[SalesProRetry] Error re-extracting ${file.name}:`, error);
+      results[idx] = { ...originalExtraction, wasDoubleChecked: true };
+    }
+
+    if (i < indicesToRetry.length - 1) {
+      await sleep(DELAY_BETWEEN_PRO_REQUESTS_MS);
+    }
+  }
+
+  onProgress?.(indicesToRetry.length, indicesToRetry.length);
+
+  return results;
 }
 
 // ─── Excel-to-Excel Comparison (Справка издадени документи) ─────────────────

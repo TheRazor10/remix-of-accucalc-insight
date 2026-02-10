@@ -52,6 +52,8 @@ export interface ExtractedSalesPdfData {
   vatRate: number | null;        // VAT rate if detected (20%, 9%, 0%)
   rawText: string;               // Full extracted PDF text for debugging
   extractionMethod: 'native' | 'ocr';
+  usedProModel?: boolean;        // Whether Pro model was used for extraction
+  wasDoubleChecked?: boolean;    // Whether this was re-extracted and compared
 }
 
 /**
