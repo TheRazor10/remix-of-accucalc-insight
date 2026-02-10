@@ -111,10 +111,11 @@ async function pdfPageToImage(pdf: pdfjsLib.PDFDocumentProxy, pageNum: number): 
 export async function extractScannedPdfWithOcr(
   file: File,
   fileIndex: number,
-  firmVatId: string | null = null
+  firmVatId: string | null = null,
+  useProModel: boolean = false
 ): Promise<ExtractedSalesPdfData> {
   try {
-    console.log(`[OCR Fallback] Processing scanned PDF: ${file.name}`);
+    console.log(`[OCR Fallback] Processing scanned PDF: ${file.name} (Pro: ${useProModel})`);
 
     // Load PDF
     const arrayBuffer = await file.arrayBuffer();
@@ -135,7 +136,7 @@ export async function extractScannedPdfWithOcr(
       body: JSON.stringify({
         imageBase64,
         mimeType,
-        useProModel: false,
+        useProModel,
         ownCompanyIds,
       }),
     });
@@ -164,6 +165,7 @@ export async function extractScannedPdfWithOcr(
       vatRate: null,
       rawText: '',
       extractionMethod: 'ocr',
+      usedProModel: useProModel,
     };
   } catch (error) {
     console.error(`[OCR Fallback] Error processing ${file.name}:`, error);

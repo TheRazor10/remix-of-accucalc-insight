@@ -6,7 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { FileUpload } from '@/components/FileUpload';
 import { parseSalesJournal } from '@/lib/salesJournalParser';
 import { extractMultiplePdfInvoices, extractMultipleScannedPdfs } from '@/lib/pdfTextExtractor';
-import { runSalesVerification, runExcelToExcelComparison } from '@/lib/salesComparison';
+import { runSalesVerification, runExcelToExcelComparison, reExtractSuspiciousSalesInvoices } from '@/lib/salesComparison';
 import { SalesExcelRow, SalesVerificationSummary, SalesJournalParseResult, ExtractedSalesPdfData, ExcelToExcelSummary } from '@/lib/salesComparisonTypes';
 import { parseMultipleIssuedDocs } from '@/lib/issuedDocsParser';
 import { SalesComparisonResults } from '@/components/SalesComparisonResults';
@@ -41,6 +41,7 @@ export function SalesVerificationTab() {
   const [isComparingExcel, setIsComparingExcel] = useState(false);
   const [showExportWarning, setShowExportWarning] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const handleExport = async () => {
     if (!excelFile || !verificationResult) return;
@@ -231,7 +232,49 @@ export function SalesVerificationTab() {
 
       setIsExtracting(false);
 
-      const result = runSalesVerification(allExtractedPdfs, excelData, effectiveFirmVatId);
+      // Phase 3: Run initial verification
+      let result = runSalesVerification(allExtractedPdfs, excelData, effectiveFirmVatId);
+
+      // Phase 4: Re-extract suspicious/not-found scanned invoices with Pro model
+      if (scannedPdfFiles.length > 0) {
+        const retryIndices = result.comparisons
+          .filter(c => c.overallStatus === 'suspicious' || c.overallStatus === 'not_found')
+          .map(c => c.extractedData.pdfIndex);
+
+        const toRetryCount = retryIndices.filter(
+          idx => allExtractedPdfs[idx]?.extractionMethod === 'ocr' && !allExtractedPdfs[idx]?.usedProModel
+        ).length;
+
+        if (toRetryCount > 0) {
+          setIsRetrying(true);
+          setExtractionProgress(0);
+
+          toast({
+            title: 'Проверка на съмнителни',
+            description: `Повторно извличане на ${toRetryCount} фактури с Pro модел...`,
+          });
+
+          allExtractedPdfs = await reExtractSuspiciousSalesInvoices(
+            retryIndices,
+            scannedPdfFiles,
+            pdfFiles.length,
+            allExtractedPdfs,
+            result.comparisons,
+            excelData,
+            effectiveFirmVatId,
+            (completed, total, fileName) => {
+              setExtractionProgress((completed / total) * 100);
+              if (fileName) setCurrentFileName(fileName);
+            }
+          );
+
+          setIsRetrying(false);
+
+          // Re-run verification with updated extractions
+          result = runSalesVerification(allExtractedPdfs, excelData, effectiveFirmVatId);
+        }
+      }
+
       setVerificationResult(result);
 
       const scannedCount = scannedPdfFiles.length;
@@ -248,6 +291,7 @@ export function SalesVerificationTab() {
     } finally {
       setIsLoading(false);
       setIsExtracting(false);
+      setIsRetrying(false);
       setCurrentFileName('');
       setExtractionPhase('native');
     }
@@ -564,20 +608,24 @@ export function SalesVerificationTab() {
       {/* Verify Button */}
       {excelFile && (pdfFiles.length > 0 || scannedPdfFiles.length > 0) && !verificationResult && (
         <div className="p-6 md:p-8 border-b border-border">
-          {isExtracting ? (
+          {(isExtracting || isRetrying) ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  {extractionPhase === 'scanned' ? (
+                  {isRetrying ? (
+                    <RefreshCw className="h-5 w-5 animate-spin text-amber-500" />
+                  ) : extractionPhase === 'scanned' ? (
                     <ScanLine className="h-5 w-5 animate-pulse text-orange-500" />
                   ) : (
                     <Loader2 className="h-5 w-5 animate-spin text-primary" />
                   )}
                   <div>
                     <p className="text-sm text-foreground font-medium">
-                      {extractionPhase === 'scanned'
-                        ? `OCR обработка на сканирани PDF... (${Math.round(extractionProgress)}%)`
-                        : `Извличане от нативни PDF... (${Math.round(extractionProgress)}%)`
+                      {isRetrying
+                        ? `Pro модел: повторно извличане... (${Math.round(extractionProgress)}%)`
+                        : extractionPhase === 'scanned'
+                          ? `OCR обработка на сканирани PDF... (${Math.round(extractionProgress)}%)`
+                          : `Извличане от нативни PDF... (${Math.round(extractionProgress)}%)`
                       }
                     </p>
                     {currentFileName && (

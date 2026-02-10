@@ -152,7 +152,31 @@ Make sure to extract BOTH supplierId and clientId as separate fields.`;
 
         console.log(`[${new Date().toISOString()}] Processing image with ${modelName}...`);
 
-        const result = await model.generateContent([fullPrompt, imagePart]);
+        // Retry logic for transient errors (503, timeout, overloaded)
+        const MAX_RETRIES = 3;
+        let lastError;
+        let result;
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            result = await model.generateContent([fullPrompt, imagePart]);
+            break; // Success
+          } catch (err) {
+            lastError = err;
+            const msg = (err.message || '').toLowerCase();
+            const isRetryable = msg.includes('503') || msg.includes('overloaded') ||
+              msg.includes('service unavailable') || msg.includes('timed out') ||
+              msg.includes('timeout') || msg.includes('resource exhausted');
+
+            if (isRetryable && attempt < MAX_RETRIES) {
+              const delay = Math.pow(2, attempt) * 1000; // 2s, 4s
+              console.log(`[${new Date().toISOString()}] Attempt ${attempt} failed (${msg.substring(0, 80)}), retrying in ${delay}ms...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+              throw err;
+            }
+          }
+        }
+
         const response = await result.response;
         const text = response.text();
 
