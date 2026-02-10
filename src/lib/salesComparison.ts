@@ -213,7 +213,7 @@ function salesAmountsMatch(pdfAmount: number | null, excelAmount: number | null)
   const roundedPdf = Math.round(pdfAmount * 100) / 100;
   const roundedExcel = Math.round(excelAmount * 100) / 100;
 
-  return Math.abs(roundedPdf - roundedExcel) < 0.03;
+  return Math.abs(roundedPdf - roundedExcel) < 0.015;
 }
 
 // Field comparison helpers
@@ -568,7 +568,7 @@ function buildExcelToExcelFields(
   });
 
   // VAT (exact match, no tolerance)
-  const vatMatch = excelAmountsMatchExact(main.totalVat, secondary.vat);
+  const vatMatch = excelAmountsMatch(main.totalVat, secondary.vat);
   fields.push({
     fieldName: 'vat',
     fieldLabel: 'ДДС',
@@ -582,10 +582,7 @@ function buildExcelToExcelFields(
 
 function excelAmountsMatch(a: number | null, b: number | null): boolean {
   if (a === null || b === null) return false;
-  return Math.abs(Math.round(a * 100) - Math.round(b * 100)) <= 2; // 0.02 tolerance
+  return Math.abs(Math.round(a * 100) - Math.round(b * 100)) <= 1; // 0.01 tolerance
 }
 
-function excelAmountsMatchExact(a: number | null, b: number | null): boolean {
-  if (a === null || b === null) return false;
-  return Math.round(a * 100) === Math.round(b * 100);
-}
+
