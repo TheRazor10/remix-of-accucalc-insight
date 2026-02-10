@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import { ExtractedSalesPdfData } from './salesComparisonTypes';
 import { isGarbledText, extractScannedPdfWithOcr } from './pdfOcrFallback';
+import { API_CONFIG } from '@/config/constants';
 
 // Configure PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -569,6 +570,11 @@ export async function extractMultipleScannedPdfs(
         rawText: '',
         extractionMethod: 'ocr',
       });
+    }
+
+    // Rate-limit delay between OCR requests to avoid hitting Gemini API limits
+    if (i < files.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, API_CONFIG.delayBetweenRequests));
     }
   }
 
