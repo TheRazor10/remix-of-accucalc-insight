@@ -25,8 +25,10 @@ export async function extractPdfText(file: File): Promise<string> {
       .join(' ');
 
     fullText += pageText + '\n';
+    page.cleanup();
   }
 
+  pdf.destroy();
   return fullText;
 }
 

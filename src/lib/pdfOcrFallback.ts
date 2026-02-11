@@ -100,7 +100,15 @@ async function pdfPageToImage(pdf: pdfjsLib.PDFDocumentProxy, pageNum: number): 
   console.log(`[OCR] Image dimensions: ${canvas.width}x${canvas.height}, base64 length: ${dataUrl.length}`);
 
   // Extract base64 part
-  return { base64: dataUrl.split(',')[1], mimeType: 'image/png' };
+  const base64 = dataUrl.split(',')[1];
+
+  // Release canvas memory to prevent accumulation across many PDFs
+  canvas.width = 0;
+  canvas.height = 0;
+
+  page.cleanup();
+
+  return { base64, mimeType: 'image/png' };
 }
 
 /**
@@ -122,6 +130,9 @@ export async function extractScannedPdfWithOcr(
 
     // Process the first page (most invoices are single-page)
     const { base64: imageBase64, mimeType } = await pdfPageToImage(pdf, 1);
+
+    // Release PDF document memory now that we have the base64 image
+    pdf.destroy();
 
     console.log(`[OCR Fallback] Sending to local Gemini server for OCR (${imageBase64.length} chars)...`);
 
