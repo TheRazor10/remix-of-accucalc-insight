@@ -152,8 +152,8 @@ Make sure to extract BOTH supplierId and clientId as separate fields.`;
 
         console.log(`[${new Date().toISOString()}] Processing image with ${modelName}...`);
 
-        // Retry logic for transient errors (503, timeout, overloaded)
-        const MAX_RETRIES = 3;
+        // Retry logic for transient errors (503, 500, timeout, overloaded)
+        const MAX_RETRIES = 5;
         let lastError;
         let result;
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -163,13 +163,15 @@ Make sure to extract BOTH supplierId and clientId as separate fields.`;
           } catch (err) {
             lastError = err;
             const msg = (err.message || '').toLowerCase();
-            const isRetryable = msg.includes('503') || msg.includes('overloaded') ||
+            const isRetryable = msg.includes('503') || msg.includes('500') ||
+              msg.includes('overloaded') || msg.includes('high demand') ||
               msg.includes('service unavailable') || msg.includes('timed out') ||
-              msg.includes('timeout') || msg.includes('resource exhausted');
+              msg.includes('timeout') || msg.includes('resource exhausted') ||
+              msg.includes('internal server error');
 
             if (isRetryable && attempt < MAX_RETRIES) {
-              const delay = Math.pow(2, attempt) * 1000; // 2s, 4s
-              console.log(`[${new Date().toISOString()}] Attempt ${attempt} failed (${msg.substring(0, 80)}), retrying in ${delay}ms...`);
+              const delay = Math.pow(2, attempt) * 2000; // 4s, 8s, 16s, 32s
+              console.log(`[${new Date().toISOString()}] Attempt ${attempt}/${MAX_RETRIES} failed (${msg.substring(0, 80)}), retrying in ${delay / 1000}s...`);
               await new Promise(resolve => setTimeout(resolve, delay));
             } else {
               throw err;

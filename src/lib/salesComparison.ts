@@ -421,9 +421,23 @@ export function runSalesVerification(
 // ─── Pro Re-extraction for Suspicious/Unreadable Sales Invoices ──────────────
 
 const DELAY_BETWEEN_PRO_REQUESTS_MS = 2000;
+const PRO_MAX_RETRIES = 3;
+const PRO_BASE_BACKOFF_MS = 10000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Check if error is retryable (overloaded, rate limited, 503)
+function isSalesRetryableError(error: unknown): boolean {
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    return msg.includes('429') || msg.includes('rate limit') ||
+           msg.includes('503') || msg.includes('overloaded') ||
+           msg.includes('high demand') || msg.includes('service unavailable') ||
+           error.name === 'RetryableError';
+  }
+  return false;
 }
 
 /**
@@ -540,24 +554,35 @@ export async function reExtractSuspiciousSalesInvoices(
 
     onProgress?.(i, indicesToRetry.length, file.name);
 
-    try {
-      console.log(`[SalesProRetry] Re-extracting ${file.name} with Pro model...`);
+    // Retry loop for Pro model extraction (handles transient 503/overload errors)
+    for (let retryAttempt = 0; retryAttempt <= PRO_MAX_RETRIES; retryAttempt++) {
+      try {
+        console.log(`[SalesProRetry] Re-extracting ${file.name} with Pro model${retryAttempt > 0 ? ` (retry ${retryAttempt}/${PRO_MAX_RETRIES})` : ''}...`);
 
-      const proResult = await extractScannedPdfWithOcr(file, idx, firmVatId, true);
+        const proResult = await extractScannedPdfWithOcr(file, idx, firmVatId, true);
 
-      // Find the Excel row this was matched to in the first pass
-      const comparison = firstPassComparisons[idx];
-      const matchedExcelRow = comparison?.matchedExcelRow !== null && comparison?.matchedExcelRow !== undefined
-        ? excelRowsByIndex.get(comparison.matchedExcelRow) ?? null
-        : null;
+        // Find the Excel row this was matched to in the first pass
+        const comparison = firstPassComparisons[idx];
+        const matchedExcelRow = comparison?.matchedExcelRow !== null && comparison?.matchedExcelRow !== undefined
+          ? excelRowsByIndex.get(comparison.matchedExcelRow) ?? null
+          : null;
 
-      const betterResult = selectBetterSalesExtraction(originalExtraction, proResult, matchedExcelRow);
-      results[idx] = betterResult;
+        const betterResult = selectBetterSalesExtraction(originalExtraction, proResult, matchedExcelRow);
+        results[idx] = betterResult;
 
-      console.log(`[SalesProRetry] Result for ${file.name}: kept ${betterResult.usedProModel ? 'Pro' : 'original'}`);
-    } catch (error) {
-      console.error(`[SalesProRetry] Error re-extracting ${file.name}:`, error);
-      results[idx] = { ...originalExtraction, wasDoubleChecked: true };
+        console.log(`[SalesProRetry] Result for ${file.name}: kept ${betterResult.usedProModel ? 'Pro' : 'original'}`);
+        break;
+      } catch (error) {
+        if (isSalesRetryableError(error) && retryAttempt < PRO_MAX_RETRIES) {
+          const backoffMs = Math.pow(3, retryAttempt) * PRO_BASE_BACKOFF_MS;
+          console.log(`[SalesProRetry] ${file.name} failed (overloaded), retry ${retryAttempt + 1}/${PRO_MAX_RETRIES} after ${backoffMs / 1000}s`);
+          await sleep(backoffMs);
+        } else {
+          console.error(`[SalesProRetry] Error re-extracting ${file.name}:`, error);
+          results[idx] = { ...originalExtraction, wasDoubleChecked: true };
+          break;
+        }
+      }
     }
 
     if (i < indicesToRetry.length - 1) {
