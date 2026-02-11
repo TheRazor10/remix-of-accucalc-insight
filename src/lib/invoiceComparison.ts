@@ -29,12 +29,14 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const isRetryableError = (error: unknown): boolean => {
   if (error instanceof RateLimitError) return true;
   if (error instanceof Error) {
+    if (error.name === 'RetryableError') return true;
     const msg = error.message.toLowerCase();
     return msg.includes('429') ||
            msg.includes('rate limit') ||
            msg.includes('too many requests') ||
            msg.includes('503') ||
            msg.includes('overloaded') ||
+           msg.includes('high demand') ||
            msg.includes('service unavailable');
   }
   return false;
@@ -127,6 +129,11 @@ async function callStandaloneServer(
     const errorText = await response.text();
     if (response.status === 429) {
       throw new RateLimitError('Rate limit exceeded');
+    }
+    // Treat 500 responses containing 503/overload as retryable
+    const errorLower = errorText.toLowerCase();
+    if (response.status === 500 && (errorLower.includes('503') || errorLower.includes('overloaded') || errorLower.includes('high demand') || errorLower.includes('service unavailable'))) {
+      throw new RateLimitError(`Server overloaded: ${response.status} - ${errorText}`);
     }
     throw new Error(`Server error: ${response.status} - ${errorText}`);
   }
@@ -335,6 +342,8 @@ export async function reExtractSuspiciousInvoices(
 ): Promise<ExtractedInvoiceData[]> {
   const results = [...currentExtractions];
   const DELAY_BETWEEN_REQUESTS_MS = API_CONFIG.delayBetweenRequests;
+  const MAX_RETRIES = API_CONFIG.maxRetries;
+  const BASE_BACKOFF_MS = API_CONFIG.baseBackoffMs;
 
   // Filter out invoices that already used Pro model
   const indicesToRetry = indices.filter(idx => {
@@ -358,27 +367,40 @@ export async function reExtractSuspiciousInvoices(
 
     onProgress?.(i, indicesToRetry.length, file.originalFile.name);
 
-    try {
-      console.log(`[ProRetry] Re-extracting ${file.originalFile.name} with Pro model...`);
+    // Retry loop for Pro model extraction (handles transient 503/overload errors)
+    let proSuccess = false;
+    for (let retryAttempt = 0; retryAttempt <= MAX_RETRIES; retryAttempt++) {
+      try {
+        console.log(`[ProRetry] Re-extracting ${file.originalFile.name} with Pro model${retryAttempt > 0 ? ` (retry ${retryAttempt}/${MAX_RETRIES})` : ''}...`);
 
-      // Extract with Pro model (pass company IDs)
-      const proResult = await extractInvoiceDataInternal(file, idx, true, ownCompanyIds);
+        // Extract with Pro model (pass company IDs)
+        const proResult = await extractInvoiceDataInternal(file, idx, true, ownCompanyIds);
 
-      // Find the Excel row this invoice was matched to in the first pass
-      const comparison = firstPassComparisons[idx];
-      const matchedExcelRow = comparison?.matchedExcelRow !== null && comparison?.matchedExcelRow !== undefined
-        ? excelRowsByIndex.get(comparison.matchedExcelRow) ?? null
-        : null;
+        // Find the Excel row this invoice was matched to in the first pass
+        const comparison = firstPassComparisons[idx];
+        const matchedExcelRow = comparison?.matchedExcelRow !== null && comparison?.matchedExcelRow !== undefined
+          ? excelRowsByIndex.get(comparison.matchedExcelRow) ?? null
+          : null;
 
-      // Select the better result — uses Excel row for ground-truth comparison when available
-      const betterResult = selectBetterExtraction(originalExtraction, proResult, matchedExcelRow);
-      results[idx] = betterResult;
+        // Select the better result — uses Excel row for ground-truth comparison when available
+        const betterResult = selectBetterExtraction(originalExtraction, proResult, matchedExcelRow);
+        results[idx] = betterResult;
 
-      console.log(`[ProRetry] Result for ${file.originalFile.name}: kept ${betterResult.usedProModel ? 'Pro' : 'original'}`);
-    } catch (error) {
-      console.error(`[ProRetry] Error re-extracting ${file.originalFile.name}:`, error);
-      // Keep original result on error
-      results[idx] = { ...originalExtraction, wasDoubleChecked: true };
+        console.log(`[ProRetry] Result for ${file.originalFile.name}: kept ${betterResult.usedProModel ? 'Pro' : 'original'}`);
+        proSuccess = true;
+        break;
+      } catch (error) {
+        if (isRetryableError(error) && retryAttempt < MAX_RETRIES) {
+          const backoffMs = Math.pow(3, retryAttempt) * BASE_BACKOFF_MS;
+          console.log(`[ProRetry] ${file.originalFile.name} failed (overloaded), retry ${retryAttempt + 1}/${MAX_RETRIES} after ${backoffMs / 1000}s`);
+          await sleep(backoffMs);
+        } else {
+          console.error(`[ProRetry] Error re-extracting ${file.originalFile.name}:`, error);
+          // Keep original result on error
+          results[idx] = { ...originalExtraction, wasDoubleChecked: true };
+          break;
+        }
+      }
     }
 
     // Delay before next request

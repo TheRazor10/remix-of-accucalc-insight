@@ -153,6 +153,13 @@ export async function extractScannedPdfWithOcr(
 
     if (!response.ok) {
       const errorText = await response.text();
+      // Mark 500 responses containing 503/overload as retryable so callers can retry
+      const errorLower = errorText.toLowerCase();
+      if (response.status === 500 && (errorLower.includes('503') || errorLower.includes('overloaded') || errorLower.includes('high demand') || errorLower.includes('service unavailable'))) {
+        const err = new Error(`Server overloaded: ${response.status} - ${errorText}`);
+        err.name = 'RetryableError';
+        throw err;
+      }
       throw new Error(`Server error: ${response.status} - ${errorText}`);
     }
 
