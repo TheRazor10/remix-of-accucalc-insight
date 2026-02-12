@@ -810,7 +810,7 @@ function formatAmount(value: number): string {
 
 function excelAmountsMatch(a: number | null, b: number | null): boolean {
   if (a === null || b === null) return false;
-  return Math.abs(roundTo2(a) * 100 - roundTo2(b) * 100) <= 1; // 0.01 tolerance
+  return Math.abs(roundTo2(a) - roundTo2(b)) < 0.015; // 0.01 tolerance
 }
 
 
