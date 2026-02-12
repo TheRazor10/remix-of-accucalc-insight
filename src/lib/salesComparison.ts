@@ -727,10 +727,9 @@ function buildExcelToExcelFields(
   if (/^\d{13}$/.test(normSecId)) {
     normSecId = normSecId.substring(0, 9);
   }
-  const idsMatch = normMainId === normSecId || !normMainId || !normSecId;
   let idStatus: ExcelFieldComparison['status'];
-  if (!main.counterpartyId || !secondary.bulstat) idStatus = 'missing';
-  else if (idsMatch) idStatus = 'match';
+  if (!normMainId || !normSecId) idStatus = 'missing';
+  else if (normMainId === normSecId) idStatus = 'match';
   else if (isIndividual) idStatus = 'individual';
   else idStatus = 'mismatch';
   fields.push({

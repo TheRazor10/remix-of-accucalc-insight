@@ -97,13 +97,9 @@ export async function parseIssuedDocsExcel(file: File): Promise<IssuedDocRow[]> 
     break;
   }
 
-  // Fallback: assume Format 1 standard column order
+  // If no header detected, throw an error instead of silently guessing columns
   if (headerRowIndex === -1) {
-    headerRowIndex = 0;
-    colMap = {
-      number: 0, type: 1, date: 2,
-      partner: 5, bulstat: 6, taxBase: 7, vat: 8, total: 9,
-    };
+    throw new Error('Неразпознат формат на справката — не бяха открити заглавия на колоните. Проверете дали файлът е правилен.');
   }
 
   const dataStartRow = headerRowIndex + 1;
