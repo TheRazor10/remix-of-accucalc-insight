@@ -229,10 +229,12 @@ export function runExcelInternalChecks(rows: SalesExcelRow[]): ExcelInternalChec
     if (!documentNumbers.has(docType)) {
       documentNumbers.set(docType, []);
     }
-    const numericPart = parseInt(row.documentNumber.replace(/\D/g, ''), 10);
+    const normalized = normalizeSalesDocumentNumber(row.documentNumber);
+    const numericPart = parseInt(normalized.replace(/[^0-9]/g, ''), 10);
     if (!isNaN(numericPart)) {
       documentNumbers.get(docType)!.push({
         num: numericPart,
+        normalizedKey: normalized,
         rowIndex: row.rowIndex,
         date: row.documentDate,
       });
@@ -262,21 +264,22 @@ export function runExcelInternalChecks(rows: SalesExcelRow[]): ExcelInternalChec
       }
     }
 
-    // Check for duplicates
-    const seen = new Map<number, number>();
+    // Check for duplicates (use full normalized key to avoid false positives across prefixes)
+    const seen = new Map<string, number>();
     for (const entry of entries) {
-      if (seen.has(entry.num)) {
+      const key = entry.normalizedKey;
+      if (seen.has(key)) {
         results.push({
           rowIndex: entry.rowIndex,
-          documentNumber: entry.num.toString(),
+          documentNumber: key,
           checkType: 'number_sequence',
           description: `Duplicate document number found`,
           expectedValue: 'Unique',
-          actualValue: `Rows ${seen.get(entry.num)} and ${entry.rowIndex}`,
+          actualValue: `Rows ${seen.get(key)} and ${entry.rowIndex}`,
           status: 'error',
         });
       } else {
-        seen.set(entry.num, entry.rowIndex);
+        seen.set(key, entry.rowIndex);
       }
     }
 
