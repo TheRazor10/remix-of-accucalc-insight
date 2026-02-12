@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ShoppingCart, ShoppingBag, Key } from 'lucide-react';
+import { ShoppingCart, ShoppingBag, FileStack, Key } from 'lucide-react';
 import { InvoiceVerificationTab } from '@/components/InvoiceVerificationTab';
 import { SalesVerificationTab } from '@/components/SalesVerificationTab';
+import { DocumentComparisonTab } from '@/components/DocumentComparisonTab';
 
 declare global {
   interface Window {
@@ -94,7 +95,7 @@ const InvoiceStandalone = () => {
       <main className="container mx-auto px-4 py-8">
         <div className="max-w-4xl mx-auto">
           <Tabs defaultValue="purchases" className="w-full">
-            <TabsList className="grid w-full grid-cols-2 mb-6">
+            <TabsList className="grid w-full grid-cols-3 mb-6">
               <TabsTrigger value="purchases" className="gap-2">
                 <ShoppingCart className="h-4 w-4" />
                 Покупки
@@ -102,6 +103,10 @@ const InvoiceStandalone = () => {
               <TabsTrigger value="sales" className="gap-2">
                 <ShoppingBag className="h-4 w-4" />
                 Продажби
+              </TabsTrigger>
+              <TabsTrigger value="additional" className="gap-2">
+                <FileStack className="h-4 w-4" />
+                Допълнителни
               </TabsTrigger>
             </TabsList>
 
@@ -111,6 +116,10 @@ const InvoiceStandalone = () => {
 
             <TabsContent value="sales">
               <SalesVerificationTab />
+            </TabsContent>
+
+            <TabsContent value="additional">
+              <DocumentComparisonTab />
             </TabsContent>
           </Tabs>
         </div>
