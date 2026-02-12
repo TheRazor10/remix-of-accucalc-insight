@@ -80,30 +80,16 @@ function buildComparisonResult(
   }
 
   // 5. Tax Base Amount
-  // For intra-EU services (art.69 para 2): cols 9-12 are zero, amount is in col 22 (EUR)
-  // In that case, compare PDF's EUR amount against col 22 instead of BGN against col 9
-  const isArt69Row = isArt69IntraEuRow(matchedRow);
-  if (isArt69Row && pdfData.taxBaseAmountEur !== null) {
-    fieldComparisons.push(
-      compareSalesAmount(
-        'taxBase',
-        'Tax Base (EUR)',
-        pdfData.taxBaseAmountEur,
-        matchedRow.taxBaseArt69
-      )
-    );
-  } else {
-    fieldComparisons.push(
-      compareSalesAmount(
-        'taxBase',
-        'Tax Base',
-        pdfData.taxBaseAmount,
-        matchedRow.totalTaxBase
-      )
-    );
-  }
+  fieldComparisons.push(
+    compareSalesAmount(
+      'taxBase',
+      'Tax Base',
+      pdfData.taxBaseAmount,
+      matchedRow.totalTaxBase
+    )
+  );
 
-  // 6. VAT Amount (for art.69 rows, VAT is typically 0 in both sources)
+  // 6. VAT Amount
   fieldComparisons.push(
     compareSalesAmount(
       'vat',
@@ -190,16 +176,9 @@ function countSalesMismatches(
     mismatches++;
   }
 
-  // Tax Base — use EUR comparison for art.69 intra-EU rows
-  const isArt69 = isArt69IntraEuRow(excelRow);
-  if (isArt69 && pdfData.taxBaseAmountEur !== null) {
-    if (!salesAmountsMatch(pdfData.taxBaseAmountEur, excelRow.taxBaseArt69)) {
-      mismatches++;
-    }
-  } else {
-    if (!salesAmountsMatch(pdfData.taxBaseAmount, excelRow.totalTaxBase)) {
-      mismatches++;
-    }
+  // Tax Base
+  if (!salesAmountsMatch(pdfData.taxBaseAmount, excelRow.totalTaxBase)) {
+    mismatches++;
   }
 
   // VAT
@@ -226,18 +205,6 @@ function salesClientIdsMatch(pdfId: string | null, excelId: string): boolean {
   const normExcel = excelId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
 
   return normPdf === normExcel;
-}
-
-/**
- * Check if an Excel row is an intra-EU services row (чл.69, ал.2 ЗДДС).
- * These have zero in cols 9-12 and the EUR amount in col 22.
- */
-function isArt69IntraEuRow(row: SalesExcelRow): boolean {
-  const colsZero = (row.totalTaxBase === null || row.totalTaxBase === 0) &&
-                   (row.taxBase20 === null || row.taxBase20 === 0) &&
-                   (row.taxBase9 === null || row.taxBase9 === 0) &&
-                   (row.taxBase0 === null || row.taxBase0 === 0);
-  return colsZero && row.taxBaseArt69 !== null && row.taxBaseArt69 !== 0;
 }
 
 function salesAmountsMatch(pdfAmount: number | null, excelAmount: number | null): boolean {

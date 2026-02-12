@@ -32,9 +32,6 @@ export interface SalesExcelRow {
   // Totals from columns 9 and 10
   totalTaxBase: number | null; // Column 9 - Total tax base
   totalVat: number | null;     // Column 10 - Total VAT
-
-  // Column 22 - Tax base for intra-EU services (чл.69, ал.2 ЗДДС), typically in EUR
-  taxBaseArt69: number | null;
 }
 
 /**
@@ -50,10 +47,9 @@ export interface ExtractedSalesPdfData {
   sellerId: string | null;       // VAT ID of the seller (our firm)
   clientId: string | null;       // VAT ID or EIK of the client (buyer)
   clientName: string | null;     // Client company name
-  taxBaseAmount: number | null;     // Tax base in BGN (Данъчна основа)
-  taxBaseAmountEur: number | null;  // Tax base in EUR (for intra-EU invoices)
-  vatAmount: number | null;         // VAT amount (ДДС)
-  vatRate: number | null;           // VAT rate if detected (20%, 9%, 0%)
+  taxBaseAmount: number | null;  // Tax base (Данъчна основа)
+  vatAmount: number | null;      // VAT amount (ДДС)
+  vatRate: number | null;        // VAT rate if detected (20%, 9%, 0%)
   rawText: string;               // Full extracted PDF text for debugging
   extractionMethod: 'native' | 'ocr';
   usedProModel?: boolean;        // Whether Pro model was used for extraction
