@@ -119,9 +119,11 @@ function extractDocumentNumber(text: string): string | null {
   // Look for patterns like "Фактура № 1234567890" or "№ 1234567890 / DATE"
   const patterns = [
     /(?:фактура|invoice|известие)\s*[№#:]\s*(\d{7,10})/i,
+    // Pattern for "No:0000001414" or "No: 1234567890"
+    /(?:фактура|invoice|известие)\s*No[.:]\s*(\d{7,10})/i,
     // Pattern for "№ NUMBER / DATE" format
     /№\s*(\d{7,10})\s*\/\s*\d{1,2}\.\d{1,2}\.\d{4}/i,
-    /(?:№|#|No\.?)\s*(\d{7,10})/i,
+    /(?:№|#|No[.:]?)\s*(\d{7,10})/i,
     /номер\s*[:\s]*(\d{7,10})/i,
     /(\d{10})/, // Fallback: any 10-digit number
   ];
@@ -194,6 +196,12 @@ function normalizeVatId(id: string): string {
 }
 
 /**
+ * EU VAT ID pattern: 2-letter country code + 5-15 alphanumeric characters.
+ * Covers all EU member states (BG, PL, DE, FR, RO, IT, etc.)
+ */
+const EU_VAT_REGEX = /\b([A-Z]{2})\s*(\d{5,15})\b/gi;
+
+/**
  * Check if two VAT IDs refer to the same entity.
  */
 function vatIdsMatch(a: string, b: string): boolean {
@@ -221,6 +229,19 @@ function extractSellerAndClientIds(
     }
   }
 
+  // Collect all EU VAT numbers (non-BG): PL, DE, FR, RO, IT, etc.
+  const allEuVatNumbers: string[] = [];
+  const seenEu = new Set<string>();
+  for (const m of text.matchAll(EU_VAT_REGEX)) {
+    const country = m[1].toUpperCase();
+    if (country === 'BG') continue; // BG handled above
+    const normalized = country + m[2];
+    if (!seenEu.has(normalized)) {
+      seenEu.add(normalized);
+      allEuVatNumbers.push(normalized);
+    }
+  }
+
   // Collect all EIK numbers
   const allEikNumbers: string[] = [];
   const seenEik = new Set<string>();
@@ -239,6 +260,7 @@ function extractSellerAndClientIds(
       // Our firm is the seller — all other IDs are potential clients
       const otherBg = allBgNumbers.filter(bg => !vatIdsMatch(bg, firmVatId));
       const clientFromBg = otherBg.length > 0 ? otherBg[0] : null;
+      const clientFromEu = allEuVatNumbers.length > 0 ? allEuVatNumbers[0] : null;
       const clientFromEik = allEikNumbers.length > 0 ? allEikNumbers[0] : null;
 
       // Also try section-based client extraction for better accuracy
@@ -246,7 +268,7 @@ function extractSellerAndClientIds(
       // Prefer section-based if it doesn't match our firm
       const clientId = sectionClientId && !vatIdsMatch(sectionClientId, firmVatId)
         ? sectionClientId
-        : clientFromBg || clientFromEik;
+        : clientFromBg || clientFromEu || clientFromEik;
 
       console.log(`[ID Extract] Firm ID ${firmVatId} found in PDF as seller. Client: ${clientId}`);
       return { sellerId: firmMatch.toUpperCase(), clientId };
@@ -335,11 +357,26 @@ function extractClientIdFromSection(text: string): string | null {
     const eikInClientMatch = clientSection.match(/еик[:\s]*(\d{9,13})/i);
     if (eikInClientMatch) return eikInClientMatch[1];
 
+    // BG VAT ID in client section
     const vatInClientMatch = clientSection.match(/(?:ддс|vat)[^:]*[:\s]*(BG\s*\d{9,10})/i);
     if (vatInClientMatch) return vatInClientMatch[1].replace(/\s/g, '').toUpperCase();
 
+    // EU VAT ID in client section (PL, DE, FR, RO, etc.)
+    const euVatInClientMatch = clientSection.match(/(?:ддс|vat|ДДС\s*No)[^:]*[:\s]*([A-Z]{2})\s*(\d{5,15})/i);
+    if (euVatInClientMatch) return euVatInClientMatch[1].toUpperCase() + euVatInClientMatch[2];
+
+    // EIK with country prefix in client section (e.g., "ЕИК: PL5851466250")
+    const eikWithPrefixMatch = clientSection.match(/еик[:\s]*([A-Z]{2})\s*(\d{5,15})/i);
+    if (eikWithPrefixMatch) return eikWithPrefixMatch[1].toUpperCase() + eikWithPrefixMatch[2];
+
     const bgInClientMatch = clientSection.match(/BG\s*(\d{9,10})/i);
     if (bgInClientMatch) return 'BG' + bgInClientMatch[1];
+
+    // Fallback: any EU VAT ID in client section
+    const anyEuVatMatch = clientSection.match(/\b([A-Z]{2})\s*(\d{5,15})\b/i);
+    if (anyEuVatMatch && anyEuVatMatch[1].toUpperCase() !== 'BG') {
+      return anyEuVatMatch[1].toUpperCase() + anyEuVatMatch[2];
+    }
   }
 
   // Fallback patterns
@@ -348,13 +385,15 @@ function extractClientIdFromSection(text: string): string | null {
     /клиент[^Д]*?ин\s*ддс\s*[:\s]*(BG\s*\d{9,10})/i,
     /получател[^Д]*?еик[:\s]*(\d{9,13})/i,
     /получател[^Д]*?(?:ддс|vat)[^:]*[:\s]*(BG\s*\d{9,10})/i,
+    // EU VAT fallback: "Получател ... ЕИК: PL5851466250" or "ДДС No: PL..."
+    /получател[^Д]*?(?:еик|ддс\s*No)[:\s]*([A-Z]{2}\s*\d{5,15})/i,
   ];
 
   for (const pattern of clientPatterns) {
     const match = text.match(pattern);
     if (match) {
       const id = match[1].replace(/\s/g, '');
-      return id.match(/^BG/i) ? id.toUpperCase() : id;
+      return id.match(/^[A-Z]{2}/i) ? id.toUpperCase() : id;
     }
   }
 
@@ -409,20 +448,22 @@ function extractAmounts(text: string): {
     }
   }
 
-  // VAT - BGN priority patterns
+  // VAT - BGN priority patterns (most specific first)
+  // Note: "Начислен ДДС" patterns are most reliable; avoid generic "ДДС" patterns
+  // that can accidentally match table headers like "ДДС (%)"
   const vatBgnPatterns = [
     /начислен\s*ддс[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
     /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
-    /ддс\s*\([^)]*\)[^\d]*?([\d]+[.,][\d]{2})/i,
-    /(?:начислен\s+)?ддс[^\d]*?([\d]+[.,][\d]{2})/i,
-    /vat[^\d]*?([\d]+[.,][\d]{2})/i,
+    /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})/i,
+    /vat\s*(?:amount)?[^\d]*?([\d]+[.,][\d]{2})/i,
   ];
 
   for (const pattern of vatBgnPatterns) {
     const match = text.match(pattern);
     if (match) {
       vat = parseAmountFromText(match[1]);
-      if (vat !== null && vat > 0) break;
+      // Accept 0 as valid (0% VAT invoices) — break on first successful match
+      if (vat !== null) break;
     }
   }
 
@@ -431,7 +472,7 @@ function extractAmounts(text: string): {
     vatRate = 20;
   } else if (text.match(/9[.,]?00?\s*%/) || text.includes('9%') || text.includes('9 %')) {
     vatRate = 9;
-  } else if (text.includes('0%') || text.includes('нулева ставка')) {
+  } else if (text.match(/0[.,]?00?\s*%/) || text.includes('0%') || text.includes('нулева ставка')) {
     vatRate = 0;
   }
 

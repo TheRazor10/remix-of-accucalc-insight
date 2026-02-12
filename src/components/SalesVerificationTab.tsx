@@ -265,6 +265,13 @@ export function SalesVerificationTab() {
             (completed, total, fileName) => {
               setExtractionProgress((completed / total) * 100);
               if (fileName) setCurrentFileName(fileName);
+            },
+            (failedCount) => {
+              toast({
+                title: 'Проблем със сървъра на Gemini',
+                description: `${failedCount} фактури не можаха да бъдат обработени поради претоварен сървър (503). Опитайте отново по-късно.`,
+                variant: 'destructive',
+              });
             }
           );
 
@@ -525,7 +532,25 @@ export function SalesVerificationTab() {
         )}
       </div>
 
-      {/* Step 2c: Upload Secondary Excel Files (optional) */}
+      {/* Step 2c: Placeholder for specific PDF type (coming soon) */}
+      <div className="p-6 md:p-8 border-b border-border opacity-50">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="p-2 rounded-lg bg-cyan-500/10">
+            <FileCheck className="h-5 w-5 text-cyan-500" />
+          </div>
+          <div>
+            <h2 className="font-serif font-semibold text-lg text-foreground">
+              Стъпка 2в: Специални PDF документи
+              <span className="text-sm font-normal text-muted-foreground ml-2">(очаквайте скоро)</span>
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Тази функционалност е в процес на разработка
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Step 2d: Upload Secondary Excel Files (optional) */}
       <div className="p-6 md:p-8 border-b border-border">
         <div className="flex items-center gap-3 mb-6">
           <div className="p-2 rounded-lg bg-violet-500/10">
@@ -533,7 +558,7 @@ export function SalesVerificationTab() {
           </div>
           <div>
             <h2 className="font-serif font-semibold text-lg text-foreground">
-              Стъпка 2в: Справка издадени документи
+              Стъпка 2г: Справка издадени документи
               <span className="text-sm font-normal text-muted-foreground ml-2">(по избор)</span>
             </h2>
             <p className="text-sm text-muted-foreground">

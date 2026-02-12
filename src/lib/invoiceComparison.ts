@@ -338,12 +338,14 @@ export async function reExtractSuspiciousInvoices(
   firstPassComparisons: ComparisonResult[],
   excelRows: InvoiceExcelRow[],
   onProgress?: (completed: number, total: number, currentFileName?: string) => void,
-  ownCompanyIds: string[] = []
+  ownCompanyIds: string[] = [],
+  onServerError?: (failedCount: number) => void
 ): Promise<ExtractedInvoiceData[]> {
   const results = [...currentExtractions];
   const DELAY_BETWEEN_REQUESTS_MS = API_CONFIG.delayBetweenRequests;
   const MAX_RETRIES = API_CONFIG.maxRetries;
   const BASE_BACKOFF_MS = API_CONFIG.baseBackoffMs;
+  let serverErrorCount = 0;
 
   // Filter out invoices that already used Pro model
   const indicesToRetry = indices.filter(idx => {
@@ -396,6 +398,7 @@ export async function reExtractSuspiciousInvoices(
           await sleep(backoffMs);
         } else {
           console.error(`[ProRetry] Error re-extracting ${file.originalFile.name}:`, error);
+          if (isRetryableError(error)) serverErrorCount++;
           // Keep original result on error
           results[idx] = { ...originalExtraction, wasDoubleChecked: true };
           break;
@@ -410,6 +413,10 @@ export async function reExtractSuspiciousInvoices(
   }
 
   onProgress?.(indicesToRetry.length, indicesToRetry.length);
+
+  if (serverErrorCount > 0 && onServerError) {
+    onServerError(serverErrorCount);
+  }
 
   return results;
 }

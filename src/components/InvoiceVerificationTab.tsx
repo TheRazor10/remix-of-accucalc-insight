@@ -175,7 +175,14 @@ export function InvoiceVerificationTab() {
                 setEstimatedTimeLeft(`~${estimatedSeconds} сек.`);
               }
             },
-            companyIdsToExclude
+            companyIdsToExclude,
+            (failedCount) => {
+              toast({
+                title: 'Проблем със сървъра на Gemini',
+                description: `${failedCount} фактури не можаха да бъдат обработени поради претоварен сървър (503). Опитайте отново по-късно.`,
+                variant: 'destructive',
+              });
+            }
           );
           
           setIsRetrying(false);

@@ -514,9 +514,11 @@ export async function reExtractSuspiciousSalesInvoices(
   firstPassComparisons: SalesComparisonResult[],
   excelRows: SalesExcelRow[],
   firmVatId: string | null = null,
-  onProgress?: (completed: number, total: number, currentFileName?: string) => void
+  onProgress?: (completed: number, total: number, currentFileName?: string) => void,
+  onServerError?: (failedCount: number) => void
 ): Promise<ExtractedSalesPdfData[]> {
   const results = [...currentExtractions];
+  let serverErrorCount = 0;
 
   // Only retry OCR-extracted invoices that haven't used Pro yet
   const indicesToRetry = indices.filter(idx => {
@@ -579,6 +581,7 @@ export async function reExtractSuspiciousSalesInvoices(
           await sleep(backoffMs);
         } else {
           console.error(`[SalesProRetry] Error re-extracting ${file.name}:`, error);
+          if (isSalesRetryableError(error)) serverErrorCount++;
           results[idx] = { ...originalExtraction, wasDoubleChecked: true };
           break;
         }
@@ -591,6 +594,10 @@ export async function reExtractSuspiciousSalesInvoices(
   }
 
   onProgress?.(indicesToRetry.length, indicesToRetry.length);
+
+  if (serverErrorCount > 0 && onServerError) {
+    onServerError(serverErrorCount);
+  }
 
   return results;
 }
