@@ -82,13 +82,16 @@ function buildComparisonResult(
   // 5. Tax Base Amount
   // For intra-EU services (art.69 para 2): cols 9-12 are zero, amount is in col 22 (EUR)
   // In that case, compare PDF's EUR amount against col 22 instead of BGN against col 9
+  // OCR extractions put the EUR value in taxBaseAmount (taxBaseAmountEur stays null),
+  // so fall back to taxBaseAmount when taxBaseAmountEur is not available.
   const isArt69Row = isArt69IntraEuRow(matchedRow);
-  if (isArt69Row && pdfData.taxBaseAmountEur !== null) {
+  if (isArt69Row) {
+    const eurAmount = pdfData.taxBaseAmountEur ?? pdfData.taxBaseAmount;
     fieldComparisons.push(
       compareSalesAmount(
         'taxBase',
         'Tax Base (EUR)',
-        pdfData.taxBaseAmountEur,
+        eurAmount,
         matchedRow.taxBaseArt69
       )
     );
@@ -191,9 +194,11 @@ function countSalesMismatches(
   }
 
   // Tax Base — use EUR comparison for art.69 intra-EU rows
+  // OCR extractions put the EUR value in taxBaseAmount, so fall back when taxBaseAmountEur is null
   const isArt69 = isArt69IntraEuRow(excelRow);
-  if (isArt69 && pdfData.taxBaseAmountEur !== null) {
-    if (!salesAmountsMatch(pdfData.taxBaseAmountEur, excelRow.taxBaseArt69)) {
+  if (isArt69) {
+    const eurAmount = pdfData.taxBaseAmountEur ?? pdfData.taxBaseAmount;
+    if (!salesAmountsMatch(eurAmount, excelRow.taxBaseArt69)) {
       mismatches++;
     }
   } else {
