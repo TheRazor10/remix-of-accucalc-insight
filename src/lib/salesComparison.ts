@@ -249,8 +249,8 @@ function isArt69IntraEuRow(row: SalesExcelRow): boolean {
 function salesAmountsMatch(pdfAmount: number | null, excelAmount: number | null): boolean {
   if (pdfAmount === null || excelAmount === null) return false;
 
-  const roundedPdf = Math.round(pdfAmount * 100) / 100;
-  const roundedExcel = Math.round(excelAmount * 100) / 100;
+  const roundedPdf = roundTo2(pdfAmount);
+  const roundedExcel = roundTo2(excelAmount);
 
   return Math.abs(roundedPdf - roundedExcel) < 0.015;
 }
@@ -308,7 +308,7 @@ function compareSalesAmount(
       fieldName,
       fieldLabel,
       pdfValue: null,
-      excelValue: excelAmount?.toFixed(2) ?? null,
+      excelValue: excelAmount != null ? formatAmount(excelAmount) : null,
       status: 'missing',
     };
   }
@@ -318,8 +318,8 @@ function compareSalesAmount(
   return {
     fieldName,
     fieldLabel,
-    pdfValue: pdfAmount.toFixed(2),
-    excelValue: excelAmount?.toFixed(2) ?? null,
+    pdfValue: formatAmount(pdfAmount),
+    excelValue: excelAmount != null ? formatAmount(excelAmount) : null,
     status: matches ? 'match' : 'suspicious',
   };
 }
@@ -780,8 +780,8 @@ function buildExcelToExcelFields(
   fields.push({
     fieldName: 'taxBase',
     fieldLabel: 'Данъчна основа',
-    mainValue: main.totalTaxBase?.toFixed(2) ?? null,
-    secondaryValue: secondary.taxBase?.toFixed(2) ?? null,
+    mainValue: main.totalTaxBase != null ? formatAmount(main.totalTaxBase) : null,
+    secondaryValue: secondary.taxBase != null ? formatAmount(secondary.taxBase) : null,
     status: main.totalTaxBase === null || secondary.taxBase === null ? 'missing' : taxBaseMatch ? 'match' : 'mismatch',
   });
 
@@ -790,17 +790,27 @@ function buildExcelToExcelFields(
   fields.push({
     fieldName: 'vat',
     fieldLabel: 'ДДС',
-    mainValue: main.totalVat?.toFixed(2) ?? null,
-    secondaryValue: secondary.vat?.toFixed(2) ?? null,
+    mainValue: main.totalVat != null ? formatAmount(main.totalVat) : null,
+    secondaryValue: secondary.vat != null ? formatAmount(secondary.vat) : null,
     status: main.totalVat === null || secondary.vat === null ? 'missing' : vatMatch ? 'match' : 'mismatch',
   });
 
   return fields;
 }
 
+/** Round a number to 2 decimal places using string-based exponent shifting
+ *  to avoid IEEE 754 issues (e.g. 347.275 → "347.28", not "347.27"). */
+function roundTo2(value: number): number {
+  return Number(Math.round(parseFloat(value + 'e2')) + 'e-2');
+}
+
+function formatAmount(value: number): string {
+  return roundTo2(value).toFixed(2);
+}
+
 function excelAmountsMatch(a: number | null, b: number | null): boolean {
   if (a === null || b === null) return false;
-  return Math.abs(Math.round(a * 100) - Math.round(b * 100)) <= 1; // 0.01 tolerance
+  return Math.abs(roundTo2(a) * 100 - roundTo2(b) * 100) <= 1; // 0.01 tolerance
 }
 
 
