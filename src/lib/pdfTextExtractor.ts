@@ -197,8 +197,19 @@ function normalizeVatId(id: string): string {
 }
 
 /**
+ * Valid EU member state country codes for VAT IDs.
+ * Using a whitelist prevents false positives from arbitrary 2-letter codes
+ * like "OT" in "TRANSPORT ORDER: OT178546".
+ */
+const EU_COUNTRY_CODES = new Set([
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
+  'DE', 'GR', 'EL', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT',
+  'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'XI',
+]);
+
+/**
  * EU VAT ID pattern: 2-letter country code + 5-15 alphanumeric characters.
- * Covers all EU member states (BG, PL, DE, FR, RO, IT, etc.)
+ * Matches broadly; results must be filtered through EU_COUNTRY_CODES.
  */
 const EU_VAT_REGEX = /\b([A-Z]{2})\s*(\d{5,15})\b/gi;
 
@@ -230,12 +241,14 @@ function extractSellerAndClientIds(
     }
   }
 
-  // Collect all EU VAT numbers (non-BG): PL, DE, FR, RO, IT, etc.
+  // Collect all EU VAT numbers (non-BG): PL, DE, FR, RO, IT, LU, etc.
+  // Only accept valid EU country codes to avoid false positives like "OT178546"
   const allEuVatNumbers: string[] = [];
   const seenEu = new Set<string>();
   for (const m of text.matchAll(EU_VAT_REGEX)) {
     const country = m[1].toUpperCase();
     if (country === 'BG') continue; // BG handled above
+    if (!EU_COUNTRY_CODES.has(country)) continue; // Skip non-EU codes like "OT", "NO", etc.
     const normalized = country + m[2];
     if (!seenEu.has(normalized)) {
       seenEu.add(normalized);
@@ -503,11 +516,17 @@ function extractAmounts(text: string): {
   }
 
   // Extract EUR tax base for intra-EU invoices (dual-currency format)
-  // Use [\d.,]+ (no spaces!) to avoid spanning across BGN and EUR amounts on the same line
-  // e.g. "Данъчна основа (0.00 %): BGN 782.33    400.00 EUR" → must capture 400.00, not 782.33
+  // IMPORTANT: Try "EUR {amount}" patterns FIRST to handle formats like "BGN 1,760.25 EUR 900.00"
+  // where the BGN amount sits right before "EUR" and would be falsely captured by "{amount} EUR".
+  // Then fall back to "{amount} EUR" for formats like "BGN 782.33    400.00 EUR".
   const taxBaseEurPatterns = [
+    // Priority: EUR keyword BEFORE the amount (handles "BGN 1760.25 EUR 900.00")
+    /данъчна основа.*?eur\s*([\d.,]+)/i,
+    /tax base.*?eur\s*([\d.,]+)/i,
+    // Fallback: amount BEFORE EUR keyword (handles "BGN 782.33    400.00 EUR")
     /данъчна основа.*?([\d.,]+)\s*eur/i,
     /tax base.*?([\d.,]+)\s*eur/i,
+    // € symbol patterns
     /данъчна основа.*?€\s*([\d.,]+)/i,
     /tax base.*?€\s*([\d.,]+)/i,
   ];

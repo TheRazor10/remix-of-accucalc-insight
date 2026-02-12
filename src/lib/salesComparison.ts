@@ -230,14 +230,11 @@ function salesClientIdsMatch(pdfId: string | null, excelId: string): boolean {
 
 /**
  * Check if an Excel row is an intra-EU services row (чл.69, ал.2 ЗДДС).
- * These have zero in cols 9-12 and the EUR amount in col 22.
+ * Col 22 contains the EUR amount for these rows. Some journals also put a
+ * BGN equivalent in cols 9-12, so we only check whether col 22 has a value.
  */
 function isArt69IntraEuRow(row: SalesExcelRow): boolean {
-  const colsZero = (row.totalTaxBase === null || row.totalTaxBase === 0) &&
-                   (row.taxBase20 === null || row.taxBase20 === 0) &&
-                   (row.taxBase9 === null || row.taxBase9 === 0) &&
-                   (row.taxBase0 === null || row.taxBase0 === 0);
-  return colsZero && row.taxBaseArt69 !== null && row.taxBaseArt69 !== 0;
+  return row.taxBaseArt69 !== null && row.taxBaseArt69 !== 0;
 }
 
 function salesAmountsMatch(pdfAmount: number | null, excelAmount: number | null): boolean {
