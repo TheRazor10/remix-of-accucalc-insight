@@ -273,6 +273,23 @@ function extractSellerAndClientIds(
       console.log(`[ID Extract] Firm ID ${firmVatId} found in PDF as seller. Client: ${clientId}`);
       return { sellerId: firmMatch.toUpperCase(), clientId };
     }
+
+    // Check if firmVatId matches an EU VAT number (firm could have EU VAT registration)
+    const firmEuMatch = allEuVatNumbers.find(eu => vatIdsMatch(eu, firmVatId));
+    if (firmEuMatch) {
+      const otherEu = allEuVatNumbers.filter(eu => !vatIdsMatch(eu, firmVatId));
+      const clientFromBg = allBgNumbers.length > 0 ? allBgNumbers[0] : null;
+      const clientFromEu = otherEu.length > 0 ? otherEu[0] : null;
+      const clientFromEik = allEikNumbers.length > 0 ? allEikNumbers[0] : null;
+
+      const sectionClientId = extractClientIdFromSection(text);
+      const clientId = sectionClientId && !vatIdsMatch(sectionClientId, firmVatId)
+        ? sectionClientId
+        : clientFromBg || clientFromEu || clientFromEik;
+
+      console.log(`[ID Extract] Firm EU ID ${firmVatId} found in PDF as seller. Client: ${clientId}`);
+      return { sellerId: firmEuMatch.toUpperCase(), clientId };
+    }
   }
 
   // Fallback: Try section-based extraction
@@ -298,8 +315,19 @@ function extractSellerAndClientIds(
   if (allBgNumbers.length >= 2) {
     return { sellerId: allBgNumbers[0], clientId: allBgNumbers[1] };
   }
+  if (allBgNumbers.length === 1 && allEuVatNumbers.length >= 1) {
+    // One BG + one EU VAT: BG is likely our firm, EU is counterparty
+    return { sellerId: allBgNumbers[0], clientId: allEuVatNumbers[0] };
+  }
   if (allBgNumbers.length === 1) {
     return { sellerId: allBgNumbers[0], clientId: allEikNumbers[0] || null };
+  }
+  // No BG numbers — try EU VAT IDs
+  if (allEuVatNumbers.length >= 2) {
+    return { sellerId: allEuVatNumbers[0], clientId: allEuVatNumbers[1] };
+  }
+  if (allEuVatNumbers.length === 1) {
+    return { sellerId: allEuVatNumbers[0], clientId: allEikNumbers[0] || null };
   }
 
   return {
@@ -310,18 +338,38 @@ function extractSellerAndClientIds(
 
 /**
  * Extract seller ID from dedicated seller section.
+ * Supports both Bulgarian (BG) and EU VAT IDs (PL, DE, FR, etc.)
  */
 function extractSellerIdFromSection(text: string): string | null {
-  const sellerPatterns = [
+  // First try BG-specific patterns (most common for Bulgarian sales journal)
+  const bgSellerPatterns = [
     /доставчик[^]*?ин\s*ддс\s*[:\s]*(BG\s*\d{9,10})/i,
     /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?(?:ддс|vat|идент)[^:]*[:\s]*(BG\d{9,10})/i,
     /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?(BG\s*\d{9,10})/i,
   ];
 
-  for (const pattern of sellerPatterns) {
+  for (const pattern of bgSellerPatterns) {
     const match = text.match(pattern);
     if (match) {
       return match[1].replace(/\s/g, '').toUpperCase();
+    }
+  }
+
+  // Try EU VAT ID patterns in seller section (for EU invoices / reverse charge)
+  const euSellerPatterns = [
+    /доставчик[^]*?(?:ддс|vat|ДДС\s*No)[^:]*[:\s]*([A-Z]{2})\s*(\d{5,15})/i,
+    /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?(?:ддс|vat|ДДС\s*No)[^:]*[:\s]*([A-Z]{2})\s*(\d{5,15})/i,
+    /доставчик[^]*?еик[:\s]*([A-Z]{2})\s*(\d{5,15})/i,
+    /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?([A-Z]{2})\s*(\d{5,15})/i,
+  ];
+
+  for (const pattern of euSellerPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const country = match[1].toUpperCase();
+      if (country !== 'BG') {
+        return country + match[2];
+      }
     }
   }
 
@@ -432,12 +480,15 @@ function extractAmounts(text: string): {
   let vatRate: number | null = null;
 
   // PRIORITY: Look for BGN amounts first (sales journal uses BGN)
+  // Note: use .*? instead of [^B]*? so bilingual labels like "Tax base BGN" are handled
   const taxBaseBgnPatterns = [
-    /данъчна основа[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
-    /данъчна основа[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
-    /данъчна основа[^\d]*?([\d]+[.,][\d]{2})/i,
-    /tax base[^\d]*?([\d]+[.,][\d]{2})/i,
-    /д\.о\.[^\d]*?([\d]+[.,][\d]{2})/i,
+    /данъчна основа.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /tax base.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /данъчна основа[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /tax base[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /данъчна основа[^\d]*?([\d\s]+[.,][\d]{2})/i,
+    /tax base[^\d]*?([\d\s]+[.,][\d]{2})/i,
+    /д\.о\.[^\d]*?([\d\s]+[.,][\d]{2})/i,
   ];
 
   for (const pattern of taxBaseBgnPatterns) {
@@ -451,11 +502,13 @@ function extractAmounts(text: string): {
   // VAT - BGN priority patterns (most specific first)
   // Note: "Начислен ДДС" patterns are most reliable; avoid generic "ДДС" patterns
   // that can accidentally match table headers like "ДДС (%)"
+  // Use .*? instead of [^B]*? so bilingual labels like "VAT BGN" are handled
   const vatBgnPatterns = [
-    /начислен\s*ддс[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
-    /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
-    /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})/i,
-    /vat\s*(?:amount)?[^\d]*?([\d]+[.,][\d]{2})/i,
+    /начислен\s*ддс.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /начислен\s*ддс[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /начислен\s*ддс[^\d]*?([\d\s]+[.,][\d]{2})/i,
+    /vat\s*(?:amount)?.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /vat\s*(?:amount)?[^\d]*?([\d\s]+[.,][\d]{2})/i,
   ];
 
   for (const pattern of vatBgnPatterns) {
@@ -479,12 +532,13 @@ function extractAmounts(text: string): {
   // If we found VAT and tax base doesn't match, try total - vat
   if (vat !== null && taxBase === null) {
     const totalPatterns = [
-      /сума за плащане[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-      /сума за плащане[^\d]*?([\d]+[.,][\d]{2})/i,
-      /общо[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-      /общо[^\d]*?([\d]+[.,][\d]{2})/i,
-      /total[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-      /total[^\d]*?([\d]+[.,][\d]{2})/i,
+      /сума за плащане.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+      /total.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+      /сума за плащане[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+      /total[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+      /сума за плащане[^\d]*?([\d\s]+[.,][\d]{2})/i,
+      /общо[^\d]*?([\d\s]+[.,][\d]{2})/i,
+      /total[^\d]*?([\d\s]+[.,][\d]{2})/i,
     ];
 
     for (const pattern of totalPatterns) {
