@@ -104,6 +104,7 @@ export async function parseSalesJournal(file: File): Promise<SalesJournalParseRe
     const taxBase9 = parseAmount(row[17]);         // Column 18 (0-indexed: 17) - ДО 9%
     const vat9 = parseAmount(row[18]);             // Column 19 (0-indexed: 18) - ДДС 9%
     const taxBase0 = parseAmount(row[19]);         // Column 20 (0-indexed: 19) - ДО 0%
+    const taxBaseArt69 = parseAmount(row[21]);     // Column 22 (0-indexed: 21) - ДО по чл.69, ал.2 (intra-EU, EUR)
 
     // Use the actual column 9 and 10 values for totals
     const totalTaxBase = totalTaxBaseCol9;
@@ -130,6 +131,7 @@ export async function parseSalesJournal(file: File): Promise<SalesJournalParseRe
       taxBase0,
       totalTaxBase,
       totalVat,
+      taxBaseArt69,
     });
   }
 
