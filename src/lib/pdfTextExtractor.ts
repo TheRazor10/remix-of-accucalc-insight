@@ -72,8 +72,8 @@ export function parseInvoiceFromText(
   const clientName = extractClientName(normalizedText);
 
   // Extract amounts
-  const { taxBase, vat, vatRate } = extractAmounts(normalizedText);
-  console.log(`[PDF Extract] Tax base:`, taxBase, `VAT:`, vat, `Rate:`, vatRate);
+  const { taxBase, taxBaseEur, vat, vatRate } = extractAmounts(normalizedText);
+  console.log(`[PDF Extract] Tax base:`, taxBase, `Tax base EUR:`, taxBaseEur, `VAT:`, vat, `Rate:`, vatRate);
 
   return {
     pdfIndex: fileIndex,
@@ -85,6 +85,7 @@ export function parseInvoiceFromText(
     clientId,
     clientName,
     taxBaseAmount: taxBase,
+    taxBaseAmountEur: taxBaseEur,
     vatAmount: vat,
     vatRate,
     rawText: text,
@@ -472,10 +473,12 @@ function extractClientName(text: string): string | null {
  */
 function extractAmounts(text: string): {
   taxBase: number | null;
+  taxBaseEur: number | null;
   vat: number | null;
   vatRate: number | null;
 } {
   let taxBase: number | null = null;
+  let taxBaseEur: number | null = null;
   let vat: number | null = null;
   let vatRate: number | null = null;
 
@@ -496,6 +499,24 @@ function extractAmounts(text: string): {
     if (match) {
       taxBase = parseAmountFromText(match[1]);
       if (taxBase !== null && taxBase > 0) break;
+    }
+  }
+
+  // Extract EUR tax base for intra-EU invoices (dual-currency format)
+  // Use [\d.,]+ (no spaces!) to avoid spanning across BGN and EUR amounts on the same line
+  // e.g. "Данъчна основа (0.00 %): BGN 782.33    400.00 EUR" → must capture 400.00, not 782.33
+  const taxBaseEurPatterns = [
+    /данъчна основа.*?([\d.,]+)\s*eur/i,
+    /tax base.*?([\d.,]+)\s*eur/i,
+    /данъчна основа.*?€\s*([\d.,]+)/i,
+    /tax base.*?€\s*([\d.,]+)/i,
+  ];
+
+  for (const pattern of taxBaseEurPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      taxBaseEur = parseAmountFromText(match[1]);
+      if (taxBaseEur !== null && taxBaseEur > 0) break;
     }
   }
 
@@ -553,7 +574,7 @@ function extractAmounts(text: string): {
     }
   }
 
-  return { taxBase, vat, vatRate };
+  return { taxBase, taxBaseEur, vat, vatRate };
 }
 
 /**
@@ -618,6 +639,7 @@ export async function extractMultiplePdfInvoices(
         clientId: null,
         clientName: null,
         taxBaseAmount: null,
+        taxBaseAmountEur: null,
         vatAmount: null,
         vatRate: null,
         rawText: '',
@@ -662,6 +684,7 @@ export async function extractMultipleScannedPdfs(
         clientId: null,
         clientName: null,
         taxBaseAmount: null,
+        taxBaseAmountEur: null,
         vatAmount: null,
         vatRate: null,
         rawText: '',
