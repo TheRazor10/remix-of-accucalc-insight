@@ -683,32 +683,45 @@ export async function extractMultipleScannedPdfs(
 ): Promise<ExtractedSalesPdfData[]> {
   const results: ExtractedSalesPdfData[] = [];
 
+  const FLASH_MAX_RETRIES = 2;
+  const FLASH_BASE_BACKOFF_MS = 5000;
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     onProgress?.(i, files.length, file.name);
 
-    try {
-      console.log(`[PDF Extract] Processing scanned PDF via OCR: ${file.name}`);
-      const ocrData = await extractScannedPdfWithOcr(file, startIndex + i, firmVatId ?? null);
-      results.push(ocrData);
-    } catch (error) {
-      console.error(`Error extracting scanned PDF ${file.name}:`, error);
-      results.push({
-        pdfIndex: startIndex + i,
-        fileName: file.name,
-        documentType: null,
-        documentNumber: null,
-        documentDate: null,
-        sellerId: null,
-        clientId: null,
-        clientName: null,
-        taxBaseAmount: null,
-        taxBaseAmountEur: null,
-        vatAmount: null,
-        vatRate: null,
-        rawText: '',
-        extractionMethod: 'ocr',
-      });
+    for (let attempt = 0; attempt <= FLASH_MAX_RETRIES; attempt++) {
+      try {
+        console.log(`[PDF Extract] Processing scanned PDF via OCR: ${file.name}${attempt > 0 ? ` (retry ${attempt}/${FLASH_MAX_RETRIES})` : ''}`);
+        const ocrData = await extractScannedPdfWithOcr(file, startIndex + i, firmVatId ?? null);
+        results.push(ocrData);
+        break;
+      } catch (error) {
+        if (error instanceof Error && error.name === 'RetryableError' && attempt < FLASH_MAX_RETRIES) {
+          const backoffMs = Math.pow(2, attempt) * FLASH_BASE_BACKOFF_MS;
+          console.log(`[PDF Extract] ${file.name} failed (503), retry ${attempt + 1}/${FLASH_MAX_RETRIES} after ${backoffMs / 1000}s`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        } else {
+          console.error(`Error extracting scanned PDF ${file.name}:`, error);
+          results.push({
+            pdfIndex: startIndex + i,
+            fileName: file.name,
+            documentType: null,
+            documentNumber: null,
+            documentDate: null,
+            sellerId: null,
+            clientId: null,
+            clientName: null,
+            taxBaseAmount: null,
+            taxBaseAmountEur: null,
+            vatAmount: null,
+            vatRate: null,
+            rawText: '',
+            extractionMethod: 'ocr',
+          });
+          break;
+        }
+      }
     }
 
     // Rate-limit delay between OCR requests to avoid hitting Gemini API limits
