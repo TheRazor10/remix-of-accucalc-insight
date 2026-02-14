@@ -124,13 +124,13 @@ export function extractDateComponents(dateStr: string | null): { day: number; mo
   // Check if it's an Excel serial date (numeric)
   const numericDate = parseFloat(trimmed);
   if (!isNaN(numericDate) && numericDate > 30000 && numericDate < 60000) {
-    // Excel date serial number - convert to date using UTC to avoid timezone shifts
-    const excelEpochMs = Date.UTC(1899, 11, 30);
-    const jsDate = new Date(excelEpochMs + numericDate * 24 * 60 * 60 * 1000);
+    // Excel date serial number - convert to date
+    const excelEpoch = new Date(1899, 11, 30);
+    const jsDate = new Date(excelEpoch.getTime() + numericDate * 24 * 60 * 60 * 1000);
     return {
-      day: jsDate.getUTCDate(),
-      month: jsDate.getUTCMonth() + 1,
-      year: jsDate.getUTCFullYear(),
+      day: jsDate.getDate(),
+      month: jsDate.getMonth() + 1,
+      year: jsDate.getFullYear(),
     };
   }
   

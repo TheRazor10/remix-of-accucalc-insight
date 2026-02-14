@@ -6,9 +6,9 @@
 export function cleanString(value: string | number | Date | undefined): string {
   if (value === undefined || value === null) return '';
   if (value instanceof Date) {
-    const day = value.getUTCDate().toString().padStart(2, '0');
-    const month = (value.getUTCMonth() + 1).toString().padStart(2, '0');
-    const year = value.getUTCFullYear();
+    const day = value.getDate().toString().padStart(2, '0');
+    const month = (value.getMonth() + 1).toString().padStart(2, '0');
+    const year = value.getFullYear();
     return `${day}.${month}.${year}`;
   }
   return String(value).trim();
@@ -33,27 +33,25 @@ export function formatDocumentNumber(value: string | number | Date | undefined):
 
 /**
  * Format date value - handles Date objects from Excel properly.
- * Uses UTC to avoid timezone/DST shifts.
  */
 export function formatDateValue(value: string | number | Date | undefined): string {
   if (value === undefined || value === null) return '';
 
-  // If it's a Date object (from cellDates: true), format it correctly using UTC
+  // If it's a Date object (from cellDates: true), format it correctly
   if (value instanceof Date) {
-    const day = value.getUTCDate().toString().padStart(2, '0');
-    const month = (value.getUTCMonth() + 1).toString().padStart(2, '0');
-    const year = value.getUTCFullYear();
+    const day = value.getDate().toString().padStart(2, '0');
+    const month = (value.getMonth() + 1).toString().padStart(2, '0');
+    const year = value.getFullYear();
     return `${day}.${month}.${year}`;
   }
 
   // If it's a number, it might be an Excel serial date
   if (typeof value === 'number' && value > 30000 && value < 60000) {
-    // Use UTC-based calculation to avoid timezone shifts
-    const excelEpochMs = Date.UTC(1899, 11, 30);
-    const jsDate = new Date(excelEpochMs + value * 24 * 60 * 60 * 1000);
-    const day = jsDate.getUTCDate().toString().padStart(2, '0');
-    const month = (jsDate.getUTCMonth() + 1).toString().padStart(2, '0');
-    const year = jsDate.getUTCFullYear();
+    const excelEpoch = new Date(1899, 11, 30);
+    const jsDate = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
+    const day = jsDate.getDate().toString().padStart(2, '0');
+    const month = (jsDate.getMonth() + 1).toString().padStart(2, '0');
+    const year = jsDate.getFullYear();
     return `${day}.${month}.${year}`;
   }
 
