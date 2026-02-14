@@ -80,16 +80,33 @@ function buildComparisonResult(
   }
 
   // 5. Tax Base Amount
-  fieldComparisons.push(
-    compareSalesAmount(
-      'taxBase',
-      'Tax Base',
-      pdfData.taxBaseAmount,
-      matchedRow.totalTaxBase
-    )
-  );
+  // For intra-EU services (art.69 para 2): cols 9-12 are zero, amount is in col 22 (EUR)
+  // In that case, compare PDF's EUR amount against col 22 instead of BGN against col 9
+  // OCR extractions put the EUR value in taxBaseAmount (taxBaseAmountEur stays null),
+  // so fall back to taxBaseAmount when taxBaseAmountEur is not available.
+  const isArt69Row = isArt69IntraEuRow(matchedRow);
+  if (isArt69Row) {
+    const eurAmount = pdfData.taxBaseAmountEur ?? pdfData.taxBaseAmount;
+    fieldComparisons.push(
+      compareSalesAmount(
+        'taxBase',
+        'Tax Base (EUR)',
+        eurAmount,
+        matchedRow.taxBaseArt69
+      )
+    );
+  } else {
+    fieldComparisons.push(
+      compareSalesAmount(
+        'taxBase',
+        'Tax Base',
+        pdfData.taxBaseAmount,
+        matchedRow.totalTaxBase
+      )
+    );
+  }
 
-  // 6. VAT Amount
+  // 6. VAT Amount (for art.69 rows, VAT is typically 0 in both sources)
   fieldComparisons.push(
     compareSalesAmount(
       'vat',
@@ -176,9 +193,18 @@ function countSalesMismatches(
     mismatches++;
   }
 
-  // Tax Base
-  if (!salesAmountsMatch(pdfData.taxBaseAmount, excelRow.totalTaxBase)) {
-    mismatches++;
+  // Tax Base — use EUR comparison for art.69 intra-EU rows
+  // OCR extractions put the EUR value in taxBaseAmount, so fall back when taxBaseAmountEur is null
+  const isArt69 = isArt69IntraEuRow(excelRow);
+  if (isArt69) {
+    const eurAmount = pdfData.taxBaseAmountEur ?? pdfData.taxBaseAmount;
+    if (!salesAmountsMatch(eurAmount, excelRow.taxBaseArt69)) {
+      mismatches++;
+    }
+  } else {
+    if (!salesAmountsMatch(pdfData.taxBaseAmount, excelRow.totalTaxBase)) {
+      mismatches++;
+    }
   }
 
   // VAT
@@ -207,11 +233,24 @@ function salesClientIdsMatch(pdfId: string | null, excelId: string): boolean {
   return normPdf === normExcel;
 }
 
+/**
+ * Check if an Excel row is an intra-EU services row (чл.69, ал.2 ЗДДС).
+ * These rows have zero in cols 9-12 and the EUR amount in col 22.
+ * Cols 9-12 and col 22 are mutually exclusive by design in the sales journal.
+ */
+function isArt69IntraEuRow(row: SalesExcelRow): boolean {
+  const colsZero = (row.totalTaxBase === null || row.totalTaxBase === 0) &&
+                   (row.taxBase20 === null || row.taxBase20 === 0) &&
+                   (row.taxBase9 === null || row.taxBase9 === 0) &&
+                   (row.taxBase0 === null || row.taxBase0 === 0);
+  return colsZero && row.taxBaseArt69 !== null && row.taxBaseArt69 !== 0;
+}
+
 function salesAmountsMatch(pdfAmount: number | null, excelAmount: number | null): boolean {
   if (pdfAmount === null || excelAmount === null) return false;
 
-  const roundedPdf = Math.round(pdfAmount * 100) / 100;
-  const roundedExcel = Math.round(excelAmount * 100) / 100;
+  const roundedPdf = roundTo2(pdfAmount);
+  const roundedExcel = roundTo2(excelAmount);
 
   return Math.abs(roundedPdf - roundedExcel) < 0.015;
 }
@@ -269,7 +308,7 @@ function compareSalesAmount(
       fieldName,
       fieldLabel,
       pdfValue: null,
-      excelValue: excelAmount?.toFixed(2) ?? null,
+      excelValue: excelAmount != null ? formatAmount(excelAmount) : null,
       status: 'missing',
     };
   }
@@ -279,8 +318,8 @@ function compareSalesAmount(
   return {
     fieldName,
     fieldLabel,
-    pdfValue: pdfAmount.toFixed(2),
-    excelValue: excelAmount?.toFixed(2) ?? null,
+    pdfValue: formatAmount(pdfAmount),
+    excelValue: excelAmount != null ? formatAmount(excelAmount) : null,
     status: matches ? 'match' : 'suspicious',
   };
 }
@@ -719,17 +758,13 @@ function buildExcelToExcelFields(
 
   // Counterparty ID (counterpartyId vs bulstat)
   // If either side is all-9s (physical individual placeholder), flag as 'individual' not 'mismatch'
-  // Справка IDs can be 13 digits where last 4 are "office" code - trim to first 9 for comparison
   const isIndividual = isPhysicalIndividualId(main.counterpartyId) || isPhysicalIndividualId(secondary.bulstat);
   const normMainId = main.counterpartyId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
-  let normSecId = secondary.bulstat.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
-  // If secondary ID is 13 digits, trim to first 9 (remove office suffix)
-  if (/^\d{13}$/.test(normSecId)) {
-    normSecId = normSecId.substring(0, 9);
-  }
+  const normSecId = secondary.bulstat.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
+  const idsMatch = normMainId === normSecId || !normMainId || !normSecId;
   let idStatus: ExcelFieldComparison['status'];
-  if (!normMainId || !normSecId) idStatus = 'missing';
-  else if (normMainId === normSecId) idStatus = 'match';
+  if (!main.counterpartyId || !secondary.bulstat) idStatus = 'missing';
+  else if (idsMatch) idStatus = 'match';
   else if (isIndividual) idStatus = 'individual';
   else idStatus = 'mismatch';
   fields.push({
@@ -745,8 +780,8 @@ function buildExcelToExcelFields(
   fields.push({
     fieldName: 'taxBase',
     fieldLabel: 'Данъчна основа',
-    mainValue: main.totalTaxBase?.toFixed(2) ?? null,
-    secondaryValue: secondary.taxBase?.toFixed(2) ?? null,
+    mainValue: main.totalTaxBase != null ? formatAmount(main.totalTaxBase) : null,
+    secondaryValue: secondary.taxBase != null ? formatAmount(secondary.taxBase) : null,
     status: main.totalTaxBase === null || secondary.taxBase === null ? 'missing' : taxBaseMatch ? 'match' : 'mismatch',
   });
 
@@ -755,17 +790,27 @@ function buildExcelToExcelFields(
   fields.push({
     fieldName: 'vat',
     fieldLabel: 'ДДС',
-    mainValue: main.totalVat?.toFixed(2) ?? null,
-    secondaryValue: secondary.vat?.toFixed(2) ?? null,
+    mainValue: main.totalVat != null ? formatAmount(main.totalVat) : null,
+    secondaryValue: secondary.vat != null ? formatAmount(secondary.vat) : null,
     status: main.totalVat === null || secondary.vat === null ? 'missing' : vatMatch ? 'match' : 'mismatch',
   });
 
   return fields;
 }
 
+/** Round a number to 2 decimal places using string-based exponent shifting
+ *  to avoid IEEE 754 issues (e.g. 347.275 → "347.28", not "347.27"). */
+function roundTo2(value: number): number {
+  return Number(Math.round(parseFloat(value + 'e2')) + 'e-2');
+}
+
+function formatAmount(value: number): string {
+  return roundTo2(value).toFixed(2);
+}
+
 function excelAmountsMatch(a: number | null, b: number | null): boolean {
   if (a === null || b === null) return false;
-  return Math.abs(Math.round(a * 100) - Math.round(b * 100)) <= 1; // 0.01 tolerance
+  return Math.abs(roundTo2(a) - roundTo2(b)) < 0.015; // 0.01 tolerance
 }
 
 

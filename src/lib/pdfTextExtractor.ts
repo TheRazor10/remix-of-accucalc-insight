@@ -72,8 +72,8 @@ export function parseInvoiceFromText(
   const clientName = extractClientName(normalizedText);
 
   // Extract amounts
-  const { taxBase, vat, vatRate } = extractAmounts(normalizedText);
-  console.log(`[PDF Extract] Tax base:`, taxBase, `VAT:`, vat, `Rate:`, vatRate);
+  const { taxBase, taxBaseEur, vat, vatRate } = extractAmounts(normalizedText);
+  console.log(`[PDF Extract] Tax base:`, taxBase, `Tax base EUR:`, taxBaseEur, `VAT:`, vat, `Rate:`, vatRate);
 
   return {
     pdfIndex: fileIndex,
@@ -85,6 +85,7 @@ export function parseInvoiceFromText(
     clientId,
     clientName,
     taxBaseAmount: taxBase,
+    taxBaseAmountEur: taxBaseEur,
     vatAmount: vat,
     vatRate,
     rawText: text,
@@ -196,8 +197,19 @@ function normalizeVatId(id: string): string {
 }
 
 /**
+ * Valid EU member state country codes for VAT IDs.
+ * Using a whitelist prevents false positives from arbitrary 2-letter codes
+ * like "OT" in "TRANSPORT ORDER: OT178546".
+ */
+const EU_COUNTRY_CODES = new Set([
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR',
+  'DE', 'GR', 'EL', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT',
+  'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'XI',
+]);
+
+/**
  * EU VAT ID pattern: 2-letter country code + 5-15 alphanumeric characters.
- * Covers all EU member states (BG, PL, DE, FR, RO, IT, etc.)
+ * Matches broadly; results must be filtered through EU_COUNTRY_CODES.
  */
 const EU_VAT_REGEX = /\b([A-Z]{2})\s*(\d{5,15})\b/gi;
 
@@ -229,12 +241,14 @@ function extractSellerAndClientIds(
     }
   }
 
-  // Collect all EU VAT numbers (non-BG): PL, DE, FR, RO, IT, etc.
+  // Collect all EU VAT numbers (non-BG): PL, DE, FR, RO, IT, LU, etc.
+  // Only accept valid EU country codes to avoid false positives like "OT178546"
   const allEuVatNumbers: string[] = [];
   const seenEu = new Set<string>();
   for (const m of text.matchAll(EU_VAT_REGEX)) {
     const country = m[1].toUpperCase();
     if (country === 'BG') continue; // BG handled above
+    if (!EU_COUNTRY_CODES.has(country)) continue; // Skip non-EU codes like "OT", "NO", etc.
     const normalized = country + m[2];
     if (!seenEu.has(normalized)) {
       seenEu.add(normalized);
@@ -273,6 +287,23 @@ function extractSellerAndClientIds(
       console.log(`[ID Extract] Firm ID ${firmVatId} found in PDF as seller. Client: ${clientId}`);
       return { sellerId: firmMatch.toUpperCase(), clientId };
     }
+
+    // Check if firmVatId matches an EU VAT number (firm could have EU VAT registration)
+    const firmEuMatch = allEuVatNumbers.find(eu => vatIdsMatch(eu, firmVatId));
+    if (firmEuMatch) {
+      const otherEu = allEuVatNumbers.filter(eu => !vatIdsMatch(eu, firmVatId));
+      const clientFromBg = allBgNumbers.length > 0 ? allBgNumbers[0] : null;
+      const clientFromEu = otherEu.length > 0 ? otherEu[0] : null;
+      const clientFromEik = allEikNumbers.length > 0 ? allEikNumbers[0] : null;
+
+      const sectionClientId = extractClientIdFromSection(text);
+      const clientId = sectionClientId && !vatIdsMatch(sectionClientId, firmVatId)
+        ? sectionClientId
+        : clientFromBg || clientFromEu || clientFromEik;
+
+      console.log(`[ID Extract] Firm EU ID ${firmVatId} found in PDF as seller. Client: ${clientId}`);
+      return { sellerId: firmEuMatch.toUpperCase(), clientId };
+    }
   }
 
   // Fallback: Try section-based extraction
@@ -298,8 +329,19 @@ function extractSellerAndClientIds(
   if (allBgNumbers.length >= 2) {
     return { sellerId: allBgNumbers[0], clientId: allBgNumbers[1] };
   }
+  if (allBgNumbers.length === 1 && allEuVatNumbers.length >= 1) {
+    // One BG + one EU VAT: BG is likely our firm, EU is counterparty
+    return { sellerId: allBgNumbers[0], clientId: allEuVatNumbers[0] };
+  }
   if (allBgNumbers.length === 1) {
     return { sellerId: allBgNumbers[0], clientId: allEikNumbers[0] || null };
+  }
+  // No BG numbers — try EU VAT IDs
+  if (allEuVatNumbers.length >= 2) {
+    return { sellerId: allEuVatNumbers[0], clientId: allEuVatNumbers[1] };
+  }
+  if (allEuVatNumbers.length === 1) {
+    return { sellerId: allEuVatNumbers[0], clientId: allEikNumbers[0] || null };
   }
 
   return {
@@ -310,18 +352,38 @@ function extractSellerAndClientIds(
 
 /**
  * Extract seller ID from dedicated seller section.
+ * Supports both Bulgarian (BG) and EU VAT IDs (PL, DE, FR, etc.)
  */
 function extractSellerIdFromSection(text: string): string | null {
-  const sellerPatterns = [
+  // First try BG-specific patterns (most common for Bulgarian sales journal)
+  const bgSellerPatterns = [
     /доставчик[^]*?ин\s*ддс\s*[:\s]*(BG\s*\d{9,10})/i,
     /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?(?:ддс|vat|идент)[^:]*[:\s]*(BG\d{9,10})/i,
     /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?(BG\s*\d{9,10})/i,
   ];
 
-  for (const pattern of sellerPatterns) {
+  for (const pattern of bgSellerPatterns) {
     const match = text.match(pattern);
     if (match) {
       return match[1].replace(/\s/g, '').toUpperCase();
+    }
+  }
+
+  // Try EU VAT ID patterns in seller section (for EU invoices / reverse charge)
+  const euSellerPatterns = [
+    /доставчик[^]*?(?:ддс|vat|ДДС\s*No)[^:]*[:\s]*([A-Z]{2})\s*(\d{5,15})/i,
+    /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?(?:ддс|vat|ДДС\s*No)[^:]*[:\s]*([A-Z]{2})\s*(\d{5,15})/i,
+    /доставчик[^]*?еик[:\s]*([A-Z]{2})\s*(\d{5,15})/i,
+    /(?:доставчик|продавач|издател|supplier|seller|from)[^]*?([A-Z]{2})\s*(\d{5,15})/i,
+  ];
+
+  for (const pattern of euSellerPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const country = match[1].toUpperCase();
+      if (country !== 'BG') {
+        return country + match[2];
+      }
     }
   }
 
@@ -424,20 +486,25 @@ function extractClientName(text: string): string | null {
  */
 function extractAmounts(text: string): {
   taxBase: number | null;
+  taxBaseEur: number | null;
   vat: number | null;
   vatRate: number | null;
 } {
   let taxBase: number | null = null;
+  let taxBaseEur: number | null = null;
   let vat: number | null = null;
   let vatRate: number | null = null;
 
   // PRIORITY: Look for BGN amounts first (sales journal uses BGN)
+  // Note: use .*? instead of [^B]*? so bilingual labels like "Tax base BGN" are handled
   const taxBaseBgnPatterns = [
-    /данъчна основа[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
-    /данъчна основа[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
-    /данъчна основа[^\d]*?([\d]+[.,][\d]{2})/i,
-    /tax base[^\d]*?([\d]+[.,][\d]{2})/i,
-    /д\.о\.[^\d]*?([\d]+[.,][\d]{2})/i,
+    /данъчна основа.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /tax base.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /данъчна основа[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /tax base[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /данъчна основа[^\d]*?([\d\s]+[.,][\d]{2})/i,
+    /tax base[^\d]*?([\d\s]+[.,][\d]{2})/i,
+    /д\.о\.[^\d]*?([\d\s]+[.,][\d]{2})/i,
   ];
 
   for (const pattern of taxBaseBgnPatterns) {
@@ -448,14 +515,40 @@ function extractAmounts(text: string): {
     }
   }
 
+  // Extract EUR tax base for intra-EU invoices (dual-currency format)
+  // IMPORTANT: Try "EUR {amount}" patterns FIRST to handle formats like "BGN 1,760.25 EUR 900.00"
+  // where the BGN amount sits right before "EUR" and would be falsely captured by "{amount} EUR".
+  // Then fall back to "{amount} EUR" for formats like "BGN 782.33    400.00 EUR".
+  const taxBaseEurPatterns = [
+    // Priority: EUR keyword BEFORE the amount (handles "BGN 1760.25 EUR 900.00")
+    /данъчна основа.*?eur\s*([\d.,]+)/i,
+    /tax base.*?eur\s*([\d.,]+)/i,
+    // Fallback: amount BEFORE EUR keyword (handles "BGN 782.33    400.00 EUR")
+    /данъчна основа.*?([\d.,]+)\s*eur/i,
+    /tax base.*?([\d.,]+)\s*eur/i,
+    // € symbol patterns
+    /данъчна основа.*?€\s*([\d.,]+)/i,
+    /tax base.*?€\s*([\d.,]+)/i,
+  ];
+
+  for (const pattern of taxBaseEurPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      taxBaseEur = parseAmountFromText(match[1]);
+      if (taxBaseEur !== null && taxBaseEur > 0) break;
+    }
+  }
+
   // VAT - BGN priority patterns (most specific first)
   // Note: "Начислен ДДС" patterns are most reliable; avoid generic "ДДС" patterns
   // that can accidentally match table headers like "ДДС (%)"
+  // Use .*? instead of [^B]*? so bilingual labels like "VAT BGN" are handled
   const vatBgnPatterns = [
-    /начислен\s*ддс[^B]*?bgn\s*([\d]+[.,][\d]{2})/i,
-    /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})\s*(?:лв|bgn)/i,
-    /начислен\s*ддс[^\d]*?([\d]+[.,][\d]{2})/i,
-    /vat\s*(?:amount)?[^\d]*?([\d]+[.,][\d]{2})/i,
+    /начислен\s*ддс.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /начислен\s*ддс[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+    /начислен\s*ддс[^\d]*?([\d\s]+[.,][\d]{2})/i,
+    /vat\s*(?:amount)?.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+    /vat\s*(?:amount)?[^\d]*?([\d\s]+[.,][\d]{2})/i,
   ];
 
   for (const pattern of vatBgnPatterns) {
@@ -479,12 +572,13 @@ function extractAmounts(text: string): {
   // If we found VAT and tax base doesn't match, try total - vat
   if (vat !== null && taxBase === null) {
     const totalPatterns = [
-      /сума за плащане[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-      /сума за плащане[^\d]*?([\d]+[.,][\d]{2})/i,
-      /общо[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-      /общо[^\d]*?([\d]+[.,][\d]{2})/i,
-      /total[^€E]*?([\d]+[.,][\d]{2})\s*eur/i,
-      /total[^\d]*?([\d]+[.,][\d]{2})/i,
+      /сума за плащане.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+      /total.*?bgn\s*([\d\s]+[.,][\d]{2})/i,
+      /сума за плащане[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+      /total[^\d]*?([\d\s]+[.,][\d]{2})\s*(?:лв|bgn)/i,
+      /сума за плащане[^\d]*?([\d\s]+[.,][\d]{2})/i,
+      /общо[^\d]*?([\d\s]+[.,][\d]{2})/i,
+      /total[^\d]*?([\d\s]+[.,][\d]{2})/i,
     ];
 
     for (const pattern of totalPatterns) {
@@ -499,7 +593,7 @@ function extractAmounts(text: string): {
     }
   }
 
-  return { taxBase, vat, vatRate };
+  return { taxBase, taxBaseEur, vat, vatRate };
 }
 
 /**
@@ -564,6 +658,7 @@ export async function extractMultiplePdfInvoices(
         clientId: null,
         clientName: null,
         taxBaseAmount: null,
+        taxBaseAmountEur: null,
         vatAmount: null,
         vatRate: null,
         rawText: '',
@@ -588,31 +683,45 @@ export async function extractMultipleScannedPdfs(
 ): Promise<ExtractedSalesPdfData[]> {
   const results: ExtractedSalesPdfData[] = [];
 
+  const FLASH_MAX_RETRIES = 2;
+  const FLASH_BASE_BACKOFF_MS = 5000;
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     onProgress?.(i, files.length, file.name);
 
-    try {
-      console.log(`[PDF Extract] Processing scanned PDF via OCR: ${file.name}`);
-      const ocrData = await extractScannedPdfWithOcr(file, startIndex + i, firmVatId ?? null);
-      results.push(ocrData);
-    } catch (error) {
-      console.error(`Error extracting scanned PDF ${file.name}:`, error);
-      results.push({
-        pdfIndex: startIndex + i,
-        fileName: file.name,
-        documentType: null,
-        documentNumber: null,
-        documentDate: null,
-        sellerId: null,
-        clientId: null,
-        clientName: null,
-        taxBaseAmount: null,
-        vatAmount: null,
-        vatRate: null,
-        rawText: '',
-        extractionMethod: 'ocr',
-      });
+    for (let attempt = 0; attempt <= FLASH_MAX_RETRIES; attempt++) {
+      try {
+        console.log(`[PDF Extract] Processing scanned PDF via OCR: ${file.name}${attempt > 0 ? ` (retry ${attempt}/${FLASH_MAX_RETRIES})` : ''}`);
+        const ocrData = await extractScannedPdfWithOcr(file, startIndex + i, firmVatId ?? null);
+        results.push(ocrData);
+        break;
+      } catch (error) {
+        if (error instanceof Error && error.name === 'RetryableError' && attempt < FLASH_MAX_RETRIES) {
+          const backoffMs = Math.pow(2, attempt) * FLASH_BASE_BACKOFF_MS;
+          console.log(`[PDF Extract] ${file.name} failed (503), retry ${attempt + 1}/${FLASH_MAX_RETRIES} after ${backoffMs / 1000}s`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+        } else {
+          console.error(`Error extracting scanned PDF ${file.name}:`, error);
+          results.push({
+            pdfIndex: startIndex + i,
+            fileName: file.name,
+            documentType: null,
+            documentNumber: null,
+            documentDate: null,
+            sellerId: null,
+            clientId: null,
+            clientName: null,
+            taxBaseAmount: null,
+            taxBaseAmountEur: null,
+            vatAmount: null,
+            vatRate: null,
+            rawText: '',
+            extractionMethod: 'ocr',
+          });
+          break;
+        }
+      }
     }
 
     // Rate-limit delay between OCR requests to avoid hitting Gemini API limits

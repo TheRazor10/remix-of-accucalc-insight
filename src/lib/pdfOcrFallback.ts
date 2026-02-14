@@ -178,6 +178,7 @@ export async function extractScannedPdfWithOcr(
       clientId: data.clientId || null,
       clientName: null,
       taxBaseAmount: data.taxBaseAmount ?? null,
+      taxBaseAmountEur: null,
       vatAmount: data.vatAmount ?? null,
       vatRate: null,
       rawText: '',
@@ -186,6 +187,10 @@ export async function extractScannedPdfWithOcr(
     };
   } catch (error) {
     console.error(`[OCR Fallback] Error processing ${file.name}:`, error);
+    // Re-throw retryable errors so callers (e.g. Pro retry logic) can retry with backoff
+    if (error instanceof Error && error.name === 'RetryableError') {
+      throw error;
+    }
     return createEmptyExtractedData(fileIndex, file.name, 'ocr');
   }
 }
@@ -208,6 +213,7 @@ function createEmptyExtractedData(
     clientId: null,
     clientName: null,
     taxBaseAmount: null,
+    taxBaseAmountEur: null,
     vatAmount: null,
     vatRate: null,
     rawText: '',

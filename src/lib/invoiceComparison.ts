@@ -655,12 +655,18 @@ function documentTypesMatch(invoiceType: string | null, excelType: string): bool
  * Check if amounts match
  * @param tolerance - The tolerance for the comparison (default: 0.005 for strict matching)
  */
+/** Round a number to 2 decimal places using string-based exponent shifting
+ *  to avoid IEEE 754 issues (e.g. 347.275 → 347.28, not 347.27). */
+function roundTo2(value: number): number {
+  return Number(Math.round(parseFloat(value + 'e2')) + 'e-2');
+}
+
 function checkAmountMatch(invoiceAmount: number | null, excelAmount: number | null, tolerance: number = 0.005): boolean {
   if (invoiceAmount === null || excelAmount === null) return false;
-  
-  const roundedInvoice = Math.round(invoiceAmount * 100) / 100;
-  const roundedExcel = Math.round(excelAmount * 100) / 100;
-  
+
+  const roundedInvoice = roundTo2(invoiceAmount);
+  const roundedExcel = roundTo2(excelAmount);
+
   return Math.abs(roundedInvoice - roundedExcel) < tolerance;
 }
 
@@ -1071,8 +1077,8 @@ function compareAmount(
   }
   
   // Round both values to 2 decimal places for fair comparison
-  const roundedInvoice = Math.round(invoiceAmount * 100) / 100;
-  const roundedExcel = Math.round(excelAmount * 100) / 100;
+  const roundedInvoice = roundTo2(invoiceAmount);
+  const roundedExcel = roundTo2(excelAmount);
   
   // Use the provided tolerance (0.03 for tax base, 0.005 for VAT)
   const isMatch = Math.abs(roundedInvoice - roundedExcel) < tolerance;
@@ -1087,7 +1093,7 @@ function compareAmount(
 }
 
 function formatAmount(value: number): string {
-  return value.toLocaleString('bg-BG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return roundTo2(value).toLocaleString('bg-BG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /**
