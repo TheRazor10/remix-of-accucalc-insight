@@ -151,7 +151,7 @@ function findBestSalesMatch(
 
     const mismatches = countSalesMismatches(pdfData, row);
 
-    if (mismatches >= MAX_BEST_MATCH_MISMATCHES) continue;
+    if (mismatches > MAX_BEST_MATCH_MISMATCHES) continue;
 
     if (!bestMatch || mismatches < bestMatch.mismatches) {
       bestMatch = { row, mismatches };
