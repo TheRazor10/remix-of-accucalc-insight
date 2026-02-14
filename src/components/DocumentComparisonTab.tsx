@@ -313,8 +313,8 @@ function ExcelToExcelResults({ summary }: { summary: ExcelToExcelSummary }) {
     );
   };
 
-  const handleExport = () => {
-    exportExcelToExcelResults(summary);
+  const handleExport = async () => {
+    await exportExcelToExcelResults(summary);
   };
 
   return (

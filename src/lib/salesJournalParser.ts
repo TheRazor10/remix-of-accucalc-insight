@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { SalesExcelRow, ExcelInternalCheckResult, SalesJournalParseResult } from './salesComparisonTypes';
 import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from './excelParserUtils';
 
@@ -9,15 +9,15 @@ import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from 
  */
 export async function parseSalesJournal(file: File): Promise<SalesJournalParseResult> {
   const arrayBuffer = await file.arrayBuffer();
-  const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
 
-  const firstSheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[firstSheetName];
+  const worksheet = workbook.worksheets[0];
 
-  const data = XLSX.utils.sheet_to_json<(string | number | Date | undefined)[]>(worksheet, {
-    header: 1,
-    raw: true,
-    dateNF: 'dd.mm.yyyy'
+  // Convert to array of arrays (slice(1) to convert from ExcelJS 1-indexed to 0-indexed)
+  const data: (string | number | Date | undefined)[][] = [];
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    data.push((row.values as (string | number | Date | undefined)[]).slice(1));
   });
 
   if (data.length < 2) {
