@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { InvoiceExcelRow } from './invoiceComparisonTypes';
+import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from './excelParserUtils';
 
 /**
  * Parse a Purchase Journal (Дневник на покупките) Excel file
@@ -48,7 +49,6 @@ export async function parsePurchaseJournal(file: File): Promise<InvoiceExcelRow[
   // Data starts after the header row
   const dataStartRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
   
-  console.log(`[Excel Parser] Header row: ${headerRowIndex}, Data starts at row: ${dataStartRow}`);
   
   const rows: InvoiceExcelRow[] = [];
   
@@ -80,10 +80,6 @@ export async function parsePurchaseJournal(file: File): Promise<InvoiceExcelRow[
     // Determine if company has DDS based on BG prefix
     const hasDDS = counterpartyId.toUpperCase().startsWith('BG');
     
-    // Debug logging for first few rows
-    if (i < dataStartRow + 3) {
-      console.log(`[Excel Row ${i + 1}] DocNum: "${documentNumber}", Date: "${documentDate}", Supplier: "${counterpartyId}"`);
-    }
     
     rows.push({
       rowIndex: i + 1, // 1-indexed for display
@@ -98,82 +94,10 @@ export async function parsePurchaseJournal(file: File): Promise<InvoiceExcelRow[
     });
   }
   
-  console.log(`[Excel Parser] Parsed ${rows.length} rows`);
   return rows;
 }
 
-function cleanString(value: string | number | Date | undefined): string {
-  if (value === undefined || value === null) return '';
-  if (value instanceof Date) {
-    // Format Date objects to DD.MM.YYYY
-    const day = value.getDate().toString().padStart(2, '0');
-    const month = (value.getMonth() + 1).toString().padStart(2, '0');
-    const year = value.getFullYear();
-    return `${day}.${month}.${year}`;
-  }
-  return String(value).trim();
-}
-
-/**
- * Format document number - handles large numbers that might be in scientific notation
- */
-function formatDocumentNumber(value: string | number | Date | undefined): string {
-  if (value === undefined || value === null) return '';
-  if (value instanceof Date) return '';
-  
-  // If it's a number, convert without scientific notation
-  if (typeof value === 'number') {
-    // Use toFixed to avoid scientific notation for large numbers
-    // Then remove trailing zeros and decimal point if not needed
-    if (Number.isInteger(value)) {
-      return value.toFixed(0);
-    }
-    return value.toString();
-  }
-  
-  return String(value).trim();
-}
-
-/**
- * Format date value - handles Date objects from Excel properly
- * This is the key fix for the month/day swap issue
- */
-function formatDateValue(value: string | number | Date | undefined): string {
-  if (value === undefined || value === null) return '';
-  
-  // If it's a Date object (from cellDates: true), format it correctly
-  if (value instanceof Date) {
-    const day = value.getDate().toString().padStart(2, '0');
-    const month = (value.getMonth() + 1).toString().padStart(2, '0');
-    const year = value.getFullYear();
-    return `${day}.${month}.${year}`;
-  }
-  
-  // If it's a number, it might be an Excel serial date
-  if (typeof value === 'number' && value > 30000 && value < 60000) {
-    const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899
-    const jsDate = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
-    const day = jsDate.getDate().toString().padStart(2, '0');
-    const month = (jsDate.getMonth() + 1).toString().padStart(2, '0');
-    const year = jsDate.getFullYear();
-    return `${day}.${month}.${year}`;
-  }
-  
-  // Otherwise return as string
-  return String(value).trim();
-}
-
-function parseAmount(value: string | number | Date | undefined): number | null {
-  if (value === undefined || value === null || value === '') return null;
-  if (value instanceof Date) return null; // Dates aren't amounts
-  
-  const str = String(value)
-    .replace(/\s/g, '')      // Remove spaces
-    .replace(/,/g, '.');     // Bulgarian decimal separator
-  
-  const num = parseFloat(str);
-  return isNaN(num) ? null : num;
-}
+// cleanString, formatDocumentNumber, formatDateValue, parseAmount imported from excelParserUtils
 
 /**
  * Normalize document number for comparison
@@ -200,13 +124,13 @@ export function extractDateComponents(dateStr: string | null): { day: number; mo
   // Check if it's an Excel serial date (numeric)
   const numericDate = parseFloat(trimmed);
   if (!isNaN(numericDate) && numericDate > 30000 && numericDate < 60000) {
-    // Excel date serial number - convert to date
-    const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899
-    const jsDate = new Date(excelEpoch.getTime() + numericDate * 24 * 60 * 60 * 1000);
+    // Excel date serial number - convert to date using UTC to avoid timezone shifts
+    const excelEpochMs = Date.UTC(1899, 11, 30);
+    const jsDate = new Date(excelEpochMs + numericDate * 24 * 60 * 60 * 1000);
     return {
-      day: jsDate.getDate(),
-      month: jsDate.getMonth() + 1,
-      year: jsDate.getFullYear(),
+      day: jsDate.getUTCDate(),
+      month: jsDate.getUTCMonth() + 1,
+      year: jsDate.getUTCFullYear(),
     };
   }
   

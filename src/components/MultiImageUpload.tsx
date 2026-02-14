@@ -146,6 +146,17 @@ export function MultiImageUpload({
     }
   }, [files.length, currentPage, totalPages]);
 
+  // Revoke all blob object URLs on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      for (const file of files) {
+        if (file.previewUrl?.startsWith('blob:')) {
+          URL.revokeObjectURL(file.previewUrl);
+        }
+      }
+    };
+  }, [files]);
+
   const validateFile = (file: File): string | null => {
     const isImage = ACCEPTED_IMAGE_TYPES.includes(file.type);
     const isPdf = file.type === UPLOAD_CONFIG.acceptedPdfType;
@@ -301,6 +312,11 @@ export function MultiImageUpload({
   };
 
   const removeFile = (index: number) => {
+    const removed = files[index];
+    // Revoke object URL to free memory (only for blob URLs, not data URLs)
+    if (removed?.previewUrl?.startsWith('blob:')) {
+      URL.revokeObjectURL(removed.previewUrl);
+    }
     onFilesChange(files.filter((_, i) => i !== index));
   };
 
