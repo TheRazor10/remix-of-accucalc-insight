@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { SalesExcelRow, ExcelInternalCheckResult, SalesJournalParseResult } from './salesComparisonTypes';
+import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from './excelParserUtils';
 
 /**
  * Parse a Sales Journal (Дневник на продажбите) Excel file.
@@ -43,7 +44,6 @@ export async function parseSalesJournal(file: File): Promise<SalesJournalParseRe
     }
   }
 
-  console.log(`[Sales Parser] Firm VAT ID: ${firmVatId}`);
 
   // Find header row
   let headerRowIndex = -1;
@@ -67,7 +67,6 @@ export async function parseSalesJournal(file: File): Promise<SalesJournalParseRe
 
   const dataStartRow = headerRowIndex >= 0 ? headerRowIndex + 1 : 1;
 
-  console.log(`[Sales Parser] Header row: ${headerRowIndex}, Data starts at row: ${dataStartRow}`);
 
   const rows: SalesExcelRow[] = [];
 
@@ -112,9 +111,6 @@ export async function parseSalesJournal(file: File): Promise<SalesJournalParseRe
 
     const hasDDS = counterpartyId.toUpperCase().startsWith('BG');
 
-    if (i < dataStartRow + 3) {
-      console.log(`[Sales Row ${i + 1}] DocNum: "${documentNumber}", Date: "${documentDate}", Client: "${counterpartyId}"`);
-    }
 
     rows.push({
       rowIndex: i + 1,
@@ -135,7 +131,6 @@ export async function parseSalesJournal(file: File): Promise<SalesJournalParseRe
     });
   }
 
-  console.log(`[Sales Parser] Parsed ${rows.length} rows`);
   return { rows, firmVatId };
 }
 
@@ -147,7 +142,7 @@ export function runExcelInternalChecks(rows: SalesExcelRow[]): ExcelInternalChec
   const results: ExcelInternalCheckResult[] = [];
 
   // Track document numbers for sequence check
-  const documentNumbers: Map<string, { num: number; rowIndex: number; date: string }[]> = new Map();
+  const documentNumbers: Map<string, { num: number; rowIndex: number; date: string; normalizedKey: string }[]> = new Map();
 
   for (const row of rows) {
     // Check 1: Column 9 (totalTaxBase) should equal sum of all rate bases (20% + 9% + 0%)
@@ -307,78 +302,21 @@ export function runExcelInternalChecks(rows: SalesExcelRow[]): ExcelInternalChec
   return results;
 }
 
-// Helper functions
-function cleanString(value: string | number | Date | undefined): string {
-  if (value === undefined || value === null) return '';
-  if (value instanceof Date) {
-    const day = value.getDate().toString().padStart(2, '0');
-    const month = (value.getMonth() + 1).toString().padStart(2, '0');
-    const year = value.getFullYear();
-    return `${day}.${month}.${year}`;
-  }
-  return String(value).trim();
-}
-
-function formatDocumentNumber(value: string | number | Date | undefined): string {
-  if (value === undefined || value === null) return '';
-  if (value instanceof Date) return '';
-
-  if (typeof value === 'number') {
-    if (Number.isInteger(value)) {
-      return value.toFixed(0);
-    }
-    return value.toString();
-  }
-
-  return String(value).trim();
-}
-
-function formatDateValue(value: string | number | Date | undefined): string {
-  if (value === undefined || value === null) return '';
-
-  if (value instanceof Date) {
-    const day = value.getDate().toString().padStart(2, '0');
-    const month = (value.getMonth() + 1).toString().padStart(2, '0');
-    const year = value.getFullYear();
-    return `${day}.${month}.${year}`;
-  }
-
-  if (typeof value === 'number' && value > 30000 && value < 60000) {
-    const excelEpoch = new Date(1899, 11, 30);
-    const jsDate = new Date(excelEpoch.getTime() + value * 24 * 60 * 60 * 1000);
-    const day = jsDate.getDate().toString().padStart(2, '0');
-    const month = (jsDate.getMonth() + 1).toString().padStart(2, '0');
-    const year = jsDate.getFullYear();
-    return `${day}.${month}.${year}`;
-  }
-
-  return String(value).trim();
-}
-
-function parseAmount(value: string | number | Date | undefined): number | null {
-  if (value === undefined || value === null || value === '') return null;
-  if (value instanceof Date) return null;
-
-  const str = String(value)
-    .replace(/\s/g, '')
-    .replace(/,/g, '.');
-
-  const num = parseFloat(str);
-  return isNaN(num) ? null : num;
-}
+// cleanString, formatDocumentNumber, formatDateValue, parseAmount imported from excelParserUtils
 
 /**
- * Parse a date string in DD.MM.YYYY format to a Date object.
+ * Parse a date string in DD.MM.YYYY or DD.MM.YY format to a Date object.
  */
 function parseDate(dateStr: string): Date | null {
   if (!dateStr) return null;
 
-  const match = dateStr.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  const match = dateStr.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
   if (!match) return null;
 
   const day = parseInt(match[1], 10);
   const month = parseInt(match[2], 10) - 1; // JS months are 0-indexed
-  const year = parseInt(match[3], 10);
+  let year = parseInt(match[3], 10);
+  if (year < 100) year = year > 50 ? 1900 + year : 2000 + year;
 
   return new Date(year, month, day);
 }
@@ -395,20 +333,50 @@ export function normalizeSalesDocumentNumber(num: string | null): string {
 }
 
 /**
- * Normalize date for comparison
+ * Normalize date for comparison.
+ * Handles DD.MM.YYYY, DD/MM/YYYY, DD-MM-YYYY, and YYYY-MM-DD (ISO) formats.
  */
 export function normalizeSalesDate(dateStr: string | null): string {
   if (!dateStr) return '';
 
   const trimmed = dateStr.trim();
 
-  // DD.MM.YYYY format
+  // DD.MM.YYYY or DD.MM.YY format (dots)
   const dotFormat = trimmed.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
   if (dotFormat) {
     const day = parseInt(dotFormat[1], 10);
     const month = parseInt(dotFormat[2], 10);
     let year = parseInt(dotFormat[3], 10);
     if (year < 100) year = year > 50 ? 1900 + year : 2000 + year;
+    return `${day.toString().padStart(2, '0')}.${month.toString().padStart(2, '0')}.${year}`;
+  }
+
+  // DD/MM/YYYY or DD/MM/YY format (slashes)
+  const slashFormat = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slashFormat) {
+    const day = parseInt(slashFormat[1], 10);
+    const month = parseInt(slashFormat[2], 10);
+    let year = parseInt(slashFormat[3], 10);
+    if (year < 100) year = year > 50 ? 1900 + year : 2000 + year;
+    return `${day.toString().padStart(2, '0')}.${month.toString().padStart(2, '0')}.${year}`;
+  }
+
+  // DD-MM-YYYY or DD-MM-YY format (dashes)
+  const dashFormat = trimmed.match(/^(\d{1,2})-(\d{1,2})-(\d{2,4})$/);
+  if (dashFormat) {
+    const day = parseInt(dashFormat[1], 10);
+    const month = parseInt(dashFormat[2], 10);
+    let year = parseInt(dashFormat[3], 10);
+    if (year < 100) year = year > 50 ? 1900 + year : 2000 + year;
+    return `${day.toString().padStart(2, '0')}.${month.toString().padStart(2, '0')}.${year}`;
+  }
+
+  // YYYY-MM-DD format (ISO)
+  const isoFormat = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoFormat) {
+    const year = parseInt(isoFormat[1], 10);
+    const month = parseInt(isoFormat[2], 10);
+    const day = parseInt(isoFormat[3], 10);
     return `${day.toString().padStart(2, '0')}.${month.toString().padStart(2, '0')}.${year}`;
   }
 

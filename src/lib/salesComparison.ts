@@ -334,6 +334,7 @@ export function runSalesVerification(
   firmVatId: string | null = null
 ): SalesVerificationSummary {
   const comparisons: (SalesComparisonResult | null)[] = new Array(extractedPdfs.length).fill(null);
+  // Note: pdfs (cloned below) may differ from extractedPdfs after ID swapping
   const claimedRows = new Set<number>();
 
   // Filter Excel rows to only include verifiable document types (Ф-ра, КИ, ДИ)
@@ -343,13 +344,14 @@ export function runSalesVerification(
 
   // Safety net: If any PDF's clientId matches our firmVatId, swap clientId and sellerId.
   // This catches cases where OCR or native extraction assigned our own ID as the client.
+  // Work on a shallow copy to avoid mutating the caller's data.
+  const pdfs = extractedPdfs.map(pdf => ({ ...pdf }));
   if (firmVatId) {
     const normFirm = firmVatId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
-    for (const pdf of extractedPdfs) {
+    for (const pdf of pdfs) {
       if (pdf.clientId) {
         const normClient = pdf.clientId.replace(/\s/g, '').toUpperCase().replace(/^BG/, '');
         if (normClient === normFirm) {
-          console.log(`[Sales Verification] Swapping IDs for "${pdf.fileName}": clientId ${pdf.clientId} matches firmVatId`);
           const oldSeller = pdf.sellerId;
           pdf.sellerId = pdf.clientId;
           pdf.clientId = oldSeller;
@@ -359,9 +361,8 @@ export function runSalesVerification(
   }
 
   // Pass 1: Exact document number matches only
-  console.log(`[Sales Verification] Pass 1: Exact matches`);
-  for (let i = 0; i < extractedPdfs.length; i++) {
-    const pdf = extractedPdfs[i];
+  for (let i = 0; i < pdfs.length; i++) {
+    const pdf = pdfs[i];
     const normalizedPdfNumber = normalizeSalesDocumentNumber(pdf.documentNumber);
     if (normalizedPdfNumber === '') continue;
 
@@ -369,7 +370,6 @@ export function runSalesVerification(
       if (claimedRows.has(row.rowIndex)) continue;
       const normalizedExcelNumber = normalizeSalesDocumentNumber(row.documentNumber);
       if (normalizedExcelNumber === normalizedPdfNumber) {
-        console.log(`  [Pass 1] PDF "${pdf.fileName}" exact match -> Row ${row.rowIndex}`);
         const result = buildComparisonResult(pdf, row, firmVatId);
         comparisons[i] = result;
         claimedRows.add(row.rowIndex);
@@ -379,19 +379,16 @@ export function runSalesVerification(
   }
 
   // Pass 2: Best-match fallback for unmatched PDFs
-  console.log(`[Sales Verification] Pass 2: Best-match fallback`);
-  for (let i = 0; i < extractedPdfs.length; i++) {
+  for (let i = 0; i < pdfs.length; i++) {
     if (comparisons[i] !== null) continue;
-    const pdf = extractedPdfs[i];
+    const pdf = pdfs[i];
 
     const bestMatch = findBestSalesMatch(pdf, verifiableExcelRows, claimedRows);
     if (bestMatch) {
-      console.log(`  [Pass 2] PDF "${pdf.fileName}" best match -> Row ${bestMatch.row.rowIndex} (${bestMatch.mismatches} mismatches)`);
       const result = buildComparisonResult(pdf, bestMatch.row, firmVatId);
       comparisons[i] = result;
       claimedRows.add(bestMatch.row.rowIndex);
     } else {
-      console.log(`  [Pass 2] PDF "${pdf.fileName}" -> Not Found`);
       comparisons[i] = {
         pdfFileName: pdf.fileName,
         pdfIndex: pdf.pdfIndex,
@@ -412,7 +409,7 @@ export function runSalesVerification(
 
     // Check if it's a foreign firm (non-BG VAT prefix)
     const isForeignFirm = row.counterpartyId &&
-      /^(RO|CZ|DE|AT|SK|HU|PL|IT|FR|ES|NL|BE|GR|PT|SE|FI|DK|IE|LU|MT|CY|EE|LV|LT|SI|HR)\d/i.test(row.counterpartyId);
+      /^(RO|CZ|DE|AT|SK|HU|PL|IT|FR|ES|NL|BE|GR|PT|SE|FI|DK|IE|LU|MT|CY|EE|LV|LT|SI|HR|GB|CH|NO|RS|MK|BA|AL|ME|TR|UA|MD)\d/i.test(row.counterpartyId);
 
     return !isForeignFirm;
   });
@@ -422,7 +419,7 @@ export function runSalesVerification(
 
   // Detect failed extractions (PDFs where all key fields are null)
   const failedExtractionFiles: string[] = [];
-  for (const pdf of extractedPdfs) {
+  for (const pdf of pdfs) {
     const allNull = pdf.documentNumber === null &&
                     pdf.documentDate === null &&
                     pdf.clientId === null &&
@@ -441,7 +438,7 @@ export function runSalesVerification(
   const excelCheckWarnings = excelChecks.filter(c => c.status === 'warning').length;
 
   return {
-    totalPdfs: extractedPdfs.length,
+    totalPdfs: pdfs.length,
     totalExcelRows: verifiableExcelRows.length,
     matchedCount,
     suspiciousCount,

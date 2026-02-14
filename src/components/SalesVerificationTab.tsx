@@ -258,6 +258,7 @@ export function SalesVerificationTab() {
   const handleClear = () => {
     setExcelFile(null);
     setExcelData([]);
+    setFirmVatId(null);
     setSupplierIdInput('');
     setPdfFiles([]);
     setScannedPdfFiles([]);
