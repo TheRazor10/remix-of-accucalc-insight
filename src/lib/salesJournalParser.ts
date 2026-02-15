@@ -14,6 +14,12 @@ export async function parseSalesJournal(file: File): Promise<SalesJournalParseRe
 
   const worksheet = workbook.worksheets[0];
 
+  if (!worksheet) {
+    throw new Error(
+      'Файлът не може да бъде прочетен — уверете се, че е във формат .xlsx (не .xls или .csv).'
+    );
+  }
+
   // Convert to array of arrays (slice(1) to convert from ExcelJS 1-indexed to 0-indexed)
   const data: (string | number | Date | undefined)[][] = [];
   worksheet.eachRow({ includeEmpty: false }, (row) => {
