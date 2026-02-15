@@ -1,7 +1,34 @@
+import * as XLSX from 'xlsx';
+
 /**
  * Shared utility functions for Excel journal parsers.
  * Used by both purchaseJournalParser.ts and salesJournalParser.ts.
  */
+
+type CellValue = string | number | Date | undefined;
+
+/**
+ * Read an Excel file (.xlsx or .xls) and return its first worksheet as a 2D array.
+ */
+export async function readExcelFile(file: File): Promise<CellValue[][]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
+    throw new Error(
+      'Файлът не съдържа листове — уверете се, че файлът не е празен.'
+    );
+  }
+  const worksheet = workbook.Sheets[sheetName];
+  const jsonData = XLSX.utils.sheet_to_json<CellValue[]>(worksheet, {
+    header: 1,
+    raw: true,
+    defval: undefined,
+  });
+
+  // Filter out completely empty rows
+  return jsonData.filter(row => row.some(cell => cell !== undefined && cell !== null && cell !== ''));
+}
 
 export function cleanString(value: string | number | Date | undefined): string {
   if (value === undefined || value === null) return '';

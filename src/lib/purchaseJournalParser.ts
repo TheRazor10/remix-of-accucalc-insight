@@ -1,23 +1,13 @@
-import ExcelJS from 'exceljs';
 import { InvoiceExcelRow } from './invoiceComparisonTypes';
-import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from './excelParserUtils';
+import { cleanString, formatDocumentNumber, formatDateValue, parseAmount, readExcelFile } from './excelParserUtils';
 
 /**
- * Parse a Purchase Journal (Дневник на покупките) Excel file
+ * Parse a Purchase Journal (Дневник на покупките) Excel file.
+ * Supports both .xlsx and .xls formats.
  * Extracts specific columns: 3 (type), 4 (number), 5 (date), 6 (ID), 9 and 10 (amounts)
  */
 export async function parsePurchaseJournal(file: File): Promise<InvoiceExcelRow[]> {
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(arrayBuffer);
-
-  const worksheet = workbook.worksheets[0];
-
-  // Convert to array of arrays (slice(1) to convert from ExcelJS 1-indexed to 0-indexed)
-  const data: (string | number | Date | undefined)[][] = [];
-  worksheet.eachRow({ includeEmpty: false }, (row) => {
-    data.push((row.values as (string | number | Date | undefined)[]).slice(1));
-  });
+  const data = await readExcelFile(file);
   
   if (data.length < 2) {
     throw new Error('Файлът не съдържа достатъчно данни');

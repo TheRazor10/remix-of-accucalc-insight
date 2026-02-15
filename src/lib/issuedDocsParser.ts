@@ -1,8 +1,9 @@
-import ExcelJS from 'exceljs';
 import { IssuedDocRow } from './salesComparisonTypes';
+import { readExcelFile } from './excelParserUtils';
 
 /**
  * Parse a "Справка издадени документи" Excel file.
+ * Supports both .xlsx and .xls formats.
  * Supports multiple column layouts from different accounting software:
  *
  * Format 1: №, Тип документ, Дата, Дни на падеж, Дата на падеж,
@@ -12,17 +13,7 @@ import { IssuedDocRow } from './salesComparisonTypes';
  *           Партньор, ЕИК, Н-р ДДС, Начин на плащане, Дан. основа, ДДС, Общо, Валута, Към документ
  */
 export async function parseIssuedDocsExcel(file: File): Promise<IssuedDocRow[]> {
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(arrayBuffer);
-
-  const worksheet = workbook.worksheets[0];
-
-  // Convert to array of arrays (slice(1) to convert from ExcelJS 1-indexed to 0-indexed)
-  const data: (string | number | Date | undefined)[][] = [];
-  worksheet.eachRow({ includeEmpty: false }, (row) => {
-    data.push((row.values as (string | number | Date | undefined)[]).slice(1));
-  });
+  const data = await readExcelFile(file);
 
   if (data.length < 2) {
     throw new Error('Файлът не съдържа достатъчно данни');
