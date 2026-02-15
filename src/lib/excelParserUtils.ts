@@ -1,7 +1,63 @@
+import ExcelJS from 'exceljs';
+import * as XLSX from 'xlsx';
+
 /**
  * Shared utility functions for Excel journal parsers.
  * Used by both purchaseJournalParser.ts and salesJournalParser.ts.
  */
+
+type CellValue = string | number | Date | undefined;
+
+/**
+ * Read an Excel file (.xlsx or .xls) and return its first worksheet as a 2D array.
+ * Uses ExcelJS for .xlsx and SheetJS for .xls files.
+ */
+export async function readExcelFile(file: File): Promise<CellValue[][]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const isXls = file.name.toLowerCase().endsWith('.xls') && !file.name.toLowerCase().endsWith('.xlsx');
+
+  if (isXls) {
+    return readXlsFile(arrayBuffer);
+  }
+  return readXlsxFile(arrayBuffer);
+}
+
+function readXlsFile(arrayBuffer: ArrayBuffer): CellValue[][] {
+  const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) {
+    throw new Error(
+      'Файлът не съдържа листове — уверете се, че файлът не е празен.'
+    );
+  }
+  const worksheet = workbook.Sheets[sheetName];
+  const jsonData = XLSX.utils.sheet_to_json<CellValue[]>(worksheet, {
+    header: 1,
+    raw: true,
+    defval: undefined,
+  });
+
+  // Filter out completely empty rows
+  return jsonData.filter(row => row.some(cell => cell !== undefined && cell !== null && cell !== ''));
+}
+
+async function readXlsxFile(arrayBuffer: ArrayBuffer): Promise<CellValue[][]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
+
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    throw new Error(
+      'Файлът не може да бъде прочетен — уверете се, че е във формат .xlsx или .xls.'
+    );
+  }
+
+  const data: CellValue[][] = [];
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    data.push((row.values as CellValue[]).slice(1));
+  });
+  return data;
+}
 
 export function cleanString(value: string | number | Date | undefined): string {
   if (value === undefined || value === null) return '';

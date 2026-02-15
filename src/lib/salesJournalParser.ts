@@ -1,30 +1,14 @@
-import ExcelJS from 'exceljs';
 import { SalesExcelRow, ExcelInternalCheckResult, SalesJournalParseResult } from './salesComparisonTypes';
-import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from './excelParserUtils';
+import { cleanString, formatDocumentNumber, formatDateValue, parseAmount, readExcelFile } from './excelParserUtils';
 
 /**
  * Parse a Sales Journal (Дневник на продажбите) Excel file.
+ * Supports both .xlsx and .xls formats.
  * Based on the standard Bulgarian VAT sales journal format.
  * Returns both the rows and the firm's VAT ID from the header.
  */
 export async function parseSalesJournal(file: File): Promise<SalesJournalParseResult> {
-  const arrayBuffer = await file.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(arrayBuffer);
-
-  const worksheet = workbook.worksheets[0];
-
-  if (!worksheet) {
-    throw new Error(
-      'Файлът не може да бъде прочетен — уверете се, че е във формат .xlsx (не .xls или .csv).'
-    );
-  }
-
-  // Convert to array of arrays (slice(1) to convert from ExcelJS 1-indexed to 0-indexed)
-  const data: (string | number | Date | undefined)[][] = [];
-  worksheet.eachRow({ includeEmpty: false }, (row) => {
-    data.push((row.values as (string | number | Date | undefined)[]).slice(1));
-  });
+  const data = await readExcelFile(file);
 
   if (data.length < 2) {
     throw new Error('File does not contain enough data');
