@@ -1,4 +1,4 @@
-import ExcelJS from 'exceljs';
+import * as XLSX from 'xlsx';
 import { VerificationSummary } from './invoiceComparisonTypes';
 
 /**
@@ -46,37 +46,37 @@ export async function exportVerificationResults(
 ): Promise<void> {
   // Read the original file
   const arrayBuffer = await originalFile.arrayBuffer();
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(arrayBuffer);
+  const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
 
-  const worksheet = workbook.worksheets[0];
+  const sheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[sheetName];
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
 
-  // Find the last column and add a new column for status
-  // ExcelJS columnCount is 1-indexed, so statusCol is the next column (1-indexed)
-  const statusCol = worksheet.columnCount + 1;
+  // Status column is the next column after the last one (0-indexed)
+  const statusCol = range.e.c + 1;
 
-  console.log(`[Export] Adding status column at column ${statusCol}`);
+  console.log(`[Export] Adding status column at column ${statusCol + 1}`);
 
   // Create status map from row index to status
   const statusMap = createRowStatusMap(summary);
 
   // Find header row (look for column numbers row: 1, 2, 3...)
-  // ExcelJS rows are 1-indexed
+  // SheetJS rows are 0-indexed
   let headerRowIndex = -1;
   let labelRowIndex = -1;
 
-  const maxScanRow = Math.min(16, worksheet.rowCount);
-  for (let row = 1; row <= maxScanRow; row++) {
-    const val0 = worksheet.getCell(row, 1).value;
-    const val1 = worksheet.getCell(row, 2).value;
-    const val2 = worksheet.getCell(row, 3).value;
+  const maxScanRow = Math.min(15, range.e.r);
+  for (let row = 0; row <= maxScanRow; row++) {
+    const val0 = worksheet[XLSX.utils.encode_cell({ r: row, c: 0 })]?.v;
+    const val1 = worksheet[XLSX.utils.encode_cell({ r: row, c: 1 })]?.v;
+    const val2 = worksheet[XLSX.utils.encode_cell({ r: row, c: 2 })]?.v;
 
     // Check for numeric header row (1, 2, 3...)
     if ((val0 === 1 || val0 === '1') &&
         (val1 === 2 || val1 === '2') &&
         (val2 === 3 || val2 === '3')) {
       headerRowIndex = row;
-      console.log(`[Export] Found numeric header row at Excel row ${row}`);
+      console.log(`[Export] Found numeric header row at Excel row ${row + 1}`);
       break;
     }
 
@@ -89,41 +89,43 @@ export async function exportVerificationResults(
   // Add header for status column
   if (headerRowIndex >= 0) {
     // Add the column number in the numeric header row
-    worksheet.getCell(headerRowIndex, statusCol).value = String(statusCol);
-    console.log(`[Export] Added column number "${statusCol}" at row ${headerRowIndex}, col ${statusCol}`);
+    const headerCell = XLSX.utils.encode_cell({ r: headerRowIndex, c: statusCol });
+    worksheet[headerCell] = { v: String(statusCol + 1), t: 's' };
+    console.log(`[Export] Added column number "${statusCol + 1}" at row ${headerRowIndex + 1}, col ${statusCol + 1}`);
 
     // Add "Статус" label in the label row (one row above numeric header)
     if (labelRowIndex >= 0 && labelRowIndex < headerRowIndex) {
-      worksheet.getCell(labelRowIndex, statusCol).value = 'Статус';
-      console.log(`[Export] Added "Статус" label at row ${labelRowIndex}, col ${statusCol}`);
+      const labelCell = XLSX.utils.encode_cell({ r: labelRowIndex, c: statusCol });
+      worksheet[labelCell] = { v: 'Статус', t: 's' };
+      console.log(`[Export] Added "Статус" label at row ${labelRowIndex + 1}, col ${statusCol + 1}`);
     }
   }
 
   // Add status values for each data row
-  // The parser rowIndex is 1-indexed from the data array (which excluded empty rows),
-  // but maps to actual Excel rows. In the old xlsx code: worksheetRow = rowIndex - 1 (0-indexed)
-  // In ExcelJS (1-indexed): the Excel row = rowIndex (directly)
-
   let statusesAdded = 0;
   for (const [rowIndex, status] of statusMap.entries()) {
-    // rowIndex from parser corresponds to Excel row number (1-indexed)
-    // In old code: worksheetRow = rowIndex - 1 (0-indexed), then encode_cell({r: worksheetRow})
-    // encode_cell with r=0 = Excel row 1, so Excel row = worksheetRow + 1 = rowIndex
-    const excelRow = rowIndex;
+    // rowIndex from parser is 1-indexed, SheetJS is 0-indexed
+    const sheetRow = rowIndex - 1;
 
-    if (excelRow >= 1 && excelRow <= worksheet.rowCount) {
-      worksheet.getCell(excelRow, statusCol).value = status;
+    if (sheetRow >= 0 && sheetRow <= range.e.r) {
+      const cellRef = XLSX.utils.encode_cell({ r: sheetRow, c: statusCol });
+      worksheet[cellRef] = { v: status, t: 's' };
       statusesAdded++;
     }
   }
 
   console.log(`[Export] Added ${statusesAdded} status values`);
 
+  // Update the range to include the new column
+  range.e.c = statusCol;
+  worksheet['!ref'] = XLSX.utils.encode_range(range);
+
   // Set column width for the status column
-  worksheet.getColumn(statusCol).width = 18;
+  if (!worksheet['!cols']) worksheet['!cols'] = [];
+  worksheet['!cols'][statusCol] = { wch: 18 };
 
   // Generate the output file
-  const outputBuffer = await workbook.xlsx.writeBuffer();
+  const outputBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
 
   // Create filename with timestamp
   const originalName = originalFile.name.replace(/\.[^/.]+$/, '');
