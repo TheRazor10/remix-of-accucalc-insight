@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { InvoiceExcelRow } from './invoiceComparisonTypes';
 import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from './excelParserUtils';
 
@@ -8,17 +8,15 @@ import { cleanString, formatDocumentNumber, formatDateValue, parseAmount } from 
  */
 export async function parsePurchaseJournal(file: File): Promise<InvoiceExcelRow[]> {
   const arrayBuffer = await file.arrayBuffer();
-  // Use cellDates: true to properly parse Excel dates as Date objects
-  const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
-  
-  const firstSheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[firstSheetName];
-  
-  // Convert to array of arrays with raw: true to preserve date objects
-  const data = XLSX.utils.sheet_to_json<(string | number | Date | undefined)[]>(worksheet, { 
-    header: 1,
-    raw: true,
-    dateNF: 'dd.mm.yyyy' // Hint for date formatting
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
+
+  const worksheet = workbook.worksheets[0];
+
+  // Convert to array of arrays (slice(1) to convert from ExcelJS 1-indexed to 0-indexed)
+  const data: (string | number | Date | undefined)[][] = [];
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    data.push((row.values as (string | number | Date | undefined)[]).slice(1));
   });
   
   if (data.length < 2) {

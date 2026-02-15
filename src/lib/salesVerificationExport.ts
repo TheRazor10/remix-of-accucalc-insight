@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { SalesVerificationSummary, ExcelToExcelSummary, isPhysicalIndividualId } from './salesComparisonTypes';
 
 /**
@@ -75,42 +75,36 @@ export async function exportSalesVerificationResults(
 ): Promise<void> {
   // Read the original file
   const arrayBuffer = await originalFile.arrayBuffer();
-  const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(arrayBuffer);
 
-  const firstSheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[firstSheetName];
+  const worksheet = workbook.worksheets[0];
 
-  // Get the range of the worksheet
-  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+  // Find the last column and add a new column for status (1-indexed)
+  const statusCol = worksheet.columnCount + 1;
 
-  // Find the last column and add a new column for status
-  const statusColIndex = range.e.c + 1;
-  const statusColLetter = XLSX.utils.encode_col(statusColIndex);
-
-  console.log(`[Sales Export] Original range: ${worksheet['!ref']}, Adding status column at index ${statusColIndex} (${statusColLetter})`);
+  console.log(`[Sales Export] Adding status column at column ${statusCol}`);
 
   // Create status map from row index to status
   const statusMap = createRowStatusMap(summary);
 
   // Find header row (look for column numbers row: 1, 2, 3...)
+  // ExcelJS rows are 1-indexed
   let headerRowIndex = -1;
   let labelRowIndex = -1;
 
-  for (let row = 0; row <= Math.min(15, range.e.r); row++) {
-    const cell0 = worksheet[XLSX.utils.encode_cell({ r: row, c: 0 })];
-    const cell1 = worksheet[XLSX.utils.encode_cell({ r: row, c: 1 })];
-    const cell2 = worksheet[XLSX.utils.encode_cell({ r: row, c: 2 })];
-
-    const val0 = cell0?.v;
-    const val1 = cell1?.v;
-    const val2 = cell2?.v;
+  const maxScanRow = Math.min(16, worksheet.rowCount);
+  for (let row = 1; row <= maxScanRow; row++) {
+    const val0 = worksheet.getCell(row, 1).value;
+    const val1 = worksheet.getCell(row, 2).value;
+    const val2 = worksheet.getCell(row, 3).value;
 
     // Check for numeric header row (1, 2, 3...)
     if ((val0 === 1 || val0 === '1') &&
         (val1 === 2 || val1 === '2') &&
         (val2 === 3 || val2 === '3')) {
       headerRowIndex = row;
-      console.log(`[Sales Export] Found numeric header row at worksheet row ${row} (Excel row ${row + 1})`);
+      console.log(`[Sales Export] Found numeric header row at Excel row ${row}`);
       break;
     }
 
@@ -123,15 +117,13 @@ export async function exportSalesVerificationResults(
   // Add header for status column
   if (headerRowIndex >= 0) {
     // Add the column number in the numeric header row
-    const headerCell = XLSX.utils.encode_cell({ r: headerRowIndex, c: statusColIndex });
-    worksheet[headerCell] = { t: 's', v: String(statusColIndex + 1) };
-    console.log(`[Sales Export] Added column number "${statusColIndex + 1}" at ${headerCell}`);
+    worksheet.getCell(headerRowIndex, statusCol).value = String(statusCol);
+    console.log(`[Sales Export] Added column number "${statusCol}" at row ${headerRowIndex}, col ${statusCol}`);
 
     // Add "Статус" label in the label row (one row above numeric header)
     if (labelRowIndex >= 0 && labelRowIndex < headerRowIndex) {
-      const labelCell = XLSX.utils.encode_cell({ r: labelRowIndex, c: statusColIndex });
-      worksheet[labelCell] = { t: 's', v: 'Статус' };
-      console.log(`[Sales Export] Added "Статус" label at ${labelCell}`);
+      worksheet.getCell(labelRowIndex, statusCol).value = 'Статус';
+      console.log(`[Sales Export] Added "Статус" label at row ${labelRowIndex}, col ${statusCol}`);
     }
   }
 
@@ -139,15 +131,14 @@ export async function exportSalesVerificationResults(
   let statusesAdded = 0;
   let statusesSkipped = 0;
   for (const [rowIndex, status] of statusMap.entries()) {
-    // rowIndex is 1-indexed (Excel row number)
-    const worksheetRow = rowIndex - 1;
+    // rowIndex from parser = Excel row number (1-indexed)
+    const excelRow = rowIndex;
 
-    if (worksheetRow >= 0 && worksheetRow <= range.e.r) {
-      // Validate: check that the row has data in the document number column (column 3, 0-indexed)
-      const docNumCell = worksheet[XLSX.utils.encode_cell({ r: worksheetRow, c: 3 })];
-      if (docNumCell && docNumCell.v !== undefined && docNumCell.v !== null && docNumCell.v !== '') {
-        const cellAddress = XLSX.utils.encode_cell({ r: worksheetRow, c: statusColIndex });
-        worksheet[cellAddress] = { t: 's', v: status };
+    if (excelRow >= 1 && excelRow <= worksheet.rowCount) {
+      // Validate: check that the row has data in the document number column (column 4, 1-indexed)
+      const docNumCell = worksheet.getCell(excelRow, 4).value;
+      if (docNumCell !== undefined && docNumCell !== null && docNumCell !== '') {
+        worksheet.getCell(excelRow, statusCol).value = status;
         statusesAdded++;
       } else {
         console.warn(`[Sales Export] Skipping row ${rowIndex}: no document number at expected column`);
@@ -158,18 +149,11 @@ export async function exportSalesVerificationResults(
 
   console.log(`[Sales Export] Added ${statusesAdded} status values`);
 
-  // Update the worksheet range to include the new column
-  range.e.c = statusColIndex;
-  worksheet['!ref'] = XLSX.utils.encode_range(range);
-
-  // Update column widths to include the new column
-  if (!worksheet['!cols']) {
-    worksheet['!cols'] = [];
-  }
-  worksheet['!cols'][statusColIndex] = { wch: 18 }; // Width for status column
+  // Set column width for the status column
+  worksheet.getColumn(statusCol).width = 18;
 
   // Generate the output file
-  const outputBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+  const outputBuffer = await workbook.xlsx.writeBuffer();
 
   // Create filename with timestamp
   const originalName = originalFile.name.replace(/\.[^/.]+$/, '');
@@ -201,7 +185,7 @@ const EXCEL_COMPARISON_STATUS_LABELS: Record<string, string> = {
 /**
  * Export Excel-to-Excel comparison results as a new Excel file.
  */
-export function exportExcelToExcelResults(summary: ExcelToExcelSummary): void {
+export async function exportExcelToExcelResults(summary: ExcelToExcelSummary): Promise<void> {
   const rows: (string | number | null)[][] = [];
 
   // Header row
@@ -249,22 +233,15 @@ export function exportExcelToExcelResults(summary: ExcelToExcelSummary): void {
   }
 
   // Create workbook
-  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Сравнение');
+  ws.addRows(rows);
 
   // Set column widths
-  ws['!cols'] = [
-    { wch: 18 }, // Doc number
-    { wch: 16 }, // Status
-    { wch: 12 }, // Row
-    { wch: 25 }, // File
-    { wch: 12 }, { wch: 12 }, // Dates
-    { wch: 16 }, { wch: 16 }, // IDs
-    { wch: 14 }, { wch: 14 }, // Tax base
-    { wch: 12 }, { wch: 12 }, // VAT
-  ];
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Сравнение');
+  const colWidths = [18, 16, 12, 25, 12, 12, 16, 16, 14, 14, 12, 12];
+  colWidths.forEach((width, i) => {
+    ws.getColumn(i + 1).width = width;
+  });
 
   // Summary sheet
   const summaryRows = [
@@ -278,12 +255,13 @@ export function exportExcelToExcelResults(summary: ExcelToExcelSummary): void {
     ['Общо дневник', summary.totalMainRows],
     ['Общо справка', summary.totalSecondaryRows],
   ];
-  const summaryWs = XLSX.utils.aoa_to_sheet(summaryRows);
-  summaryWs['!cols'] = [{ wch: 18 }, { wch: 10 }];
-  XLSX.utils.book_append_sheet(wb, summaryWs, 'Обобщение');
+  const summaryWs = wb.addWorksheet('Обобщение');
+  summaryWs.addRows(summaryRows);
+  summaryWs.getColumn(1).width = 18;
+  summaryWs.getColumn(2).width = 10;
 
   // Download
-  const outputBuffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  const outputBuffer = await wb.xlsx.writeBuffer();
   const timestamp = new Date().toISOString().slice(0, 10);
   const filename = `сравнение_дневник_справка_${timestamp}.xlsx`;
 
