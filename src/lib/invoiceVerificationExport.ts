@@ -42,10 +42,11 @@ function createRowStatusMap(summary: VerificationSummary): Map<number, string> {
  */
 export async function exportVerificationResults(
   originalFile: File,
-  summary: VerificationSummary
+  summary: VerificationSummary,
+  cachedArrayBuffer?: ArrayBuffer
 ): Promise<void> {
-  // Read the original file
-  const arrayBuffer = await originalFile.arrayBuffer();
+  // Use cached buffer if available (avoids stale File reference errors), otherwise read the file
+  const arrayBuffer = cachedArrayBuffer ?? await originalFile.arrayBuffer();
   const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
 
   const sheetName = workbook.SheetNames[0];
