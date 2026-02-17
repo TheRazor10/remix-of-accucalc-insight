@@ -132,9 +132,10 @@ function startServer(apiKey) {
         let companyIdExclusionNote = '';
         if (ownCompanyIdsList.length > 0) {
           companyIdExclusionNote = `\n\nCRITICAL - OWN COMPANY IDs:
-The following IDs belong to the invoice ISSUER/SELLER (Доставчик):
+The following IDs belong to the invoice BUYER/RECEIVER (Получател/Клиент):
 ${ownCompanyIdsList.map(id => `- ${id}`).join('\n')}
-Assign these IDs to "supplierId". The OTHER company's ID on the invoice is the "clientId" (Получател/Клиент).
+Do NOT assign these IDs to "supplierId". These are the buyer's IDs — assign them to "clientId".
+The OTHER company's ID on the invoice is the supplier/seller (Доставчик) — assign that to "supplierId".
 Make sure to extract BOTH supplierId and clientId as separate fields.`;
         }
 

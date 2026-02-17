@@ -23,6 +23,7 @@ import {
 
 export function SalesVerificationTab() {
   const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [excelArrayBuffer, setExcelArrayBuffer] = useState<ArrayBuffer | null>(null);
   const [excelData, setExcelData] = useState<SalesExcelRow[]>([]);
   const [firmVatId, setFirmVatId] = useState<string | null>(null);
   const [supplierIdInput, setSupplierIdInput] = useState<string>('');
@@ -39,11 +40,11 @@ export function SalesVerificationTab() {
   const [isRetrying, setIsRetrying] = useState(false);
 
   const handleExport = async () => {
-    if (!excelFile || !verificationResult) return;
+    if (!excelFile || !excelArrayBuffer || !verificationResult) return;
 
     setIsExporting(true);
     try {
-      await exportSalesVerificationResults(excelFile, verificationResult);
+      await exportSalesVerificationResults(excelFile, verificationResult, excelArrayBuffer);
       toast({
         title: 'Експортирано успешно',
         description: 'Файлът е изтеглен',
@@ -65,6 +66,9 @@ export function SalesVerificationTab() {
     setVerificationResult(null);
 
     try {
+      // Cache the ArrayBuffer now so export doesn't depend on a stale File reference
+      const buffer = await file.arrayBuffer();
+      setExcelArrayBuffer(buffer);
       const result = await parseSalesJournal(file);
       setExcelData(result.rows);
       setFirmVatId(result.firmVatId);
@@ -79,6 +83,7 @@ export function SalesVerificationTab() {
         variant: 'destructive',
       });
       setExcelFile(null);
+      setExcelArrayBuffer(null);
       setExcelData([]);
       setFirmVatId(null);
     }
@@ -257,6 +262,7 @@ export function SalesVerificationTab() {
 
   const handleClear = () => {
     setExcelFile(null);
+    setExcelArrayBuffer(null);
     setExcelData([]);
     setFirmVatId(null);
     setSupplierIdInput('');
