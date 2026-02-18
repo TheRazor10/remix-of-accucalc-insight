@@ -672,10 +672,8 @@ export function runExcelToExcelComparison(
     if (!normMainNum) continue;
 
     const candidates = secondaryByDocNum.get(normMainNum);
-    if (candidates && candidates.length > 0) {
-      // Pick the first unmatched candidate
-      const candidate = candidates.find(c => !matchedSecondaryRows.has(c.rowIndex)) || candidates[0];
-
+    const candidate = candidates?.find(c => !matchedSecondaryRows.has(c.rowIndex));
+    if (candidate) {
       const fields = buildExcelToExcelFields(mainRow, candidate);
       const hasMismatch = fields.some(f => f.status === 'mismatch');
       const hasIndividual = fields.some(f => f.status === 'individual');
