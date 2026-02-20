@@ -129,12 +129,6 @@ export async function exportSalesVerificationResults(
       worksheet[labelCell] = { v: 'Статус', t: 's' };
       console.log(`[Sales Export] Added "Статус" label at row ${labelRowIndex + 1}, col ${statusCol + 1}`);
     }
-  } else {
-    // No header rows in the Excel — row 0 is skipped by the parser so it is safe
-    // to place the "Статус" label there.
-    const headerCell = XLSX.utils.encode_cell({ r: 0, c: statusCol });
-    worksheet[headerCell] = { v: 'Статус', t: 's' };
-    console.log(`[Sales Export] No header rows detected; added "Статус" label at row 1, col ${statusCol + 1}`);
   }
 
   // Add status values for each data row, with document number validation
