@@ -26,8 +26,11 @@ export async function readExcelFile(file: File): Promise<CellValue[][]> {
     defval: undefined,
   });
 
-  // Filter out completely empty rows
-  return jsonData.filter(row => row.some(cell => cell !== undefined && cell !== null && cell !== ''));
+  // Return all rows including empty ones to preserve row indices.
+  // Parsers already skip empty/invalid rows, and filtering here shifts
+  // array indices away from actual sheet row positions, causing the
+  // exported status column to be offset by the number of removed rows.
+  return jsonData;
 }
 
 export function cleanString(value: string | number | Date | undefined): string {
